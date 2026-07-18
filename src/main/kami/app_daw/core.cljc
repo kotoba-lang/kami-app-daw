@@ -155,7 +155,7 @@
             {:plugin/id plugin-id :plugin/kind plugin-kind :plugin/type :audio-worklet
              :plugin/processor (get-in plugin-types [plugin-kind :plugin/processor])
              :plugin/enabled? true :plugin/mix 1.0 :plugin/mix-automation []
-             :plugin/mix-interpolation :linear
+             :plugin/mix-interpolation :linear :plugin/automation-mode :read
              :plugin/parameters (plugin-parameter-defaults plugin-kind)
              :plugin/automation {}})
     p))
@@ -202,6 +202,19 @@
     (update p :project/plugins
             #(mapv (fn [plugin] (if (= plugin-id (:plugin/id plugin))
                                   (assoc plugin :plugin/mix-interpolation interpolation) plugin)) %))
+    p))
+(def automation-modes #{:read :touch :latch :write})
+(defn set-plugin-automation-mode [p plugin-id mode]
+  (if (contains? automation-modes mode)
+    (update p :project/plugins
+            #(mapv (fn [plugin] (if (= plugin-id (:plugin/id plugin))
+                                  (assoc plugin :plugin/automation-mode mode) plugin)) %))
+    p))
+(defn write-plugin-mix-automation [p plugin-id tick value gesture? latched?]
+  (if-let [plugin (first (filter #(= plugin-id (:plugin/id %)) (:project/plugins p)))]
+    (let [mode (or (:plugin/automation-mode plugin) :read)
+          writable? (case mode :touch gesture? :latch (or gesture? latched?) :write true false)]
+      (if writable? (append-plugin-mix-automation-point p plugin-id tick value) p))
     p))
 (defn set-plugin-parameter [p plugin-id parameter value]
   (update p :project/plugins
@@ -348,6 +361,7 @@
                                    (some #(or (neg? (:automation/tick %))
                                               (not (<= 0 (:automation/value %) 1))) points))))
                         (not (contains? #{nil :linear :step} (:plugin/mix-interpolation plugin)))
+                        (not (contains? (conj automation-modes nil) (:plugin/automation-mode plugin)))
                         (not= (set (keys (:plugin/parameters descriptor)))
                               (set (keys (:plugin/parameters plugin))))
                         (some (fn [[parameter points]]

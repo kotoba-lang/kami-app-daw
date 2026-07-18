@@ -117,6 +117,22 @@
             {:automation/tick 960 :automation/value 0.8}]
            (get-in written [:project/plugins 0 :plugin/mix-automation])))
     (is (empty? (daw/validate-project written)))))
+(deftest plugin-automation-modes-govern-transport-writes
+  (let [base (daw/add-plugin p "sat" :kami/saturator)
+        touch (daw/set-plugin-automation-mode base "sat" :touch)
+        latch (daw/set-plugin-automation-mode base "sat" :latch)
+        write (daw/set-plugin-automation-mode base "sat" :write)]
+    (is (= base (daw/write-plugin-mix-automation base "sat" 120 0.2 true false)))
+    (is (empty? (get-in (daw/write-plugin-mix-automation touch "sat" 120 0.2 false false)
+                        [:project/plugins 0 :plugin/mix-automation])))
+    (is (= [120] (mapv :automation/tick (get-in (daw/write-plugin-mix-automation touch "sat" 120 0.2 true false)
+                                                 [:project/plugins 0 :plugin/mix-automation]))))
+    (is (= [240] (mapv :automation/tick (get-in (daw/write-plugin-mix-automation latch "sat" 240 0.3 false true)
+                                                 [:project/plugins 0 :plugin/mix-automation]))))
+    (is (= [360] (mapv :automation/tick (get-in (daw/write-plugin-mix-automation write "sat" 360 0.4 false false)
+                                                 [:project/plugins 0 :plugin/mix-automation]))))
+    (is (= write (daw/set-plugin-automation-mode write "sat" :trim)))
+    (is (empty? (daw/validate-project write)))))
 (deftest project-authoritative-bus-automation
   (let [automated (daw/set-bus-gain-automation p "master" [{:tick 960 :gain 0.25} {:tick 0 :gain 1.0}])]
     (is (= [{:automation/tick 0 :automation/gain 1.0} {:automation/tick 960 :automation/gain 0.25}]
