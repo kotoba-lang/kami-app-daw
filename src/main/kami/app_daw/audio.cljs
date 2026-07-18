@@ -9,9 +9,13 @@
 (def saturator-worklet-source
   "class KamiSaturator extends AudioWorkletProcessor {\n  static get parameterDescriptors() { return [{name: 'drive', defaultValue: 1, minValue: 0.1, maxValue: 8, automationRate: 'k-rate'}]; }\n  process(inputs, outputs, parameters) {\n    const input = inputs[0]; const output = outputs[0]; const drive = parameters.drive[0]; const norm = Math.tanh(drive);\n    for (let channel = 0; channel < output.length; channel++) { const source = input[channel] || input[0]; if (!source) continue; for (let i = 0; i < output[channel].length; i++) output[channel][i] = Math.tanh(source[i] * drive) / norm; }\n    return true;\n  }\n}\nregisterProcessor('kami-saturator', KamiSaturator);")
 
+(def compressor-worklet-source
+  "class KamiCompressor extends AudioWorkletProcessor {\n  static get parameterDescriptors() { return [{name: 'threshold-db', defaultValue: -18, minValue: -60, maxValue: 0, automationRate: 'k-rate'}, {name: 'ratio', defaultValue: 4, minValue: 1, maxValue: 20, automationRate: 'k-rate'}, {name: 'makeup-db', defaultValue: 0, minValue: 0, maxValue: 24, automationRate: 'k-rate'}]; }\n  process(inputs, outputs, parameters) {\n    const input = inputs[0], output = outputs[0], threshold = parameters['threshold-db'][0], ratio = parameters.ratio[0], makeup = Math.pow(10, parameters['makeup-db'][0] / 20);\n    for (let channel = 0; channel < output.length; channel++) { const source = input[channel] || input[0]; if (!source) continue; for (let i = 0; i < output[channel].length; i++) { const sample = source[i], magnitude = Math.abs(sample); if (magnitude === 0) { output[channel][i] = 0; continue; } const db = 20 * Math.log10(magnitude), compressedDb = db > threshold ? threshold + (db - threshold) / ratio : db; output[channel][i] = Math.sign(sample) * Math.pow(10, compressedDb / 20) * makeup; } }\n    return true;\n  }\n}\nregisterProcessor('kami-compressor', KamiCompressor);")
+
 (defn- worklet-url []
   (or @worklet-module-url
-      (let [url (js/URL.createObjectURL (js/Blob. #js [saturator-worklet-source] #js {:type "text/javascript"}))]
+      (let [url (js/URL.createObjectURL (js/Blob. #js [saturator-worklet-source compressor-worklet-source]
+                                                     #js {:type "text/javascript"}))]
         (reset! worklet-module-url url) url)))
 
 (defn- ensure-worklets! [ctx project]
@@ -90,8 +94,12 @@
                       (let [node (js/AudioWorkletNode. ctx (:plugin/processor plugin)
                                                        #js {:numberOfInputs 1 :numberOfOutputs 1
                                                             :outputChannelCount #js [2]})
-                            drive (.get (.-parameters node) "drive")]
-                        (set! (.-value drive) (get-in plugin [:plugin/parameters :drive] 1.0))
+                            parameters (get-in daw/plugin-types [(:plugin/kind plugin) :plugin/parameters])]
+                        (doseq [[parameter descriptor] parameters
+                                :let [audio-param (.get (.-parameters node) (name parameter))]]
+                          (when audio-param
+                            (set! (.-value audio-param)
+                                  (get-in plugin [:plugin/parameters parameter] (:parameter/default descriptor)))))
                         (.connect input node) node)
                       input)) mix (:project/plugins project))]
       (.connect output analyser))

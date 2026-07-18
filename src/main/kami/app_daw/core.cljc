@@ -133,14 +133,28 @@
                    (sort-by :automation/tick) vec))
     p))
 (def plugin-types
-  {:kami/saturator {:plugin/processor "kami-saturator" :plugin/parameters {:drive [0.1 8.0]}}})
+  {:kami/saturator
+   {:plugin/name "Saturator" :plugin/processor "kami-saturator"
+    :plugin/parameters {:drive {:parameter/name "Drive" :parameter/min 0.1 :parameter/max 8.0
+                                :parameter/default 1.0 :parameter/step 0.1}}}
+   :kami/compressor
+   {:plugin/name "Compressor" :plugin/processor "kami-compressor"
+    :plugin/parameters {:threshold-db {:parameter/name "Threshold dB" :parameter/min -60.0 :parameter/max 0.0
+                                       :parameter/default -18.0 :parameter/step 1.0}
+                        :ratio {:parameter/name "Ratio" :parameter/min 1.0 :parameter/max 20.0
+                                :parameter/default 4.0 :parameter/step 0.5}
+                        :makeup-db {:parameter/name "Makeup dB" :parameter/min 0.0 :parameter/max 24.0
+                                    :parameter/default 0.0 :parameter/step 0.5}}}})
+(defn plugin-parameter-defaults [plugin-kind]
+  (into {} (map (fn [[parameter descriptor]] [parameter (:parameter/default descriptor)]))
+        (get-in plugin-types [plugin-kind :plugin/parameters])))
 (defn add-plugin [p plugin-id plugin-kind]
   (if (and (contains? plugin-types plugin-kind)
            (not (some #(= plugin-id (:plugin/id %)) (:project/plugins p))))
     (update p :project/plugins conj
             {:plugin/id plugin-id :plugin/kind plugin-kind :plugin/type :audio-worklet
              :plugin/processor (get-in plugin-types [plugin-kind :plugin/processor])
-             :plugin/enabled? true :plugin/parameters {:drive 1.0}})
+             :plugin/enabled? true :plugin/parameters (plugin-parameter-defaults plugin-kind)})
     p))
 (defn set-plugin-enabled [p plugin-id enabled?]
   (update p :project/plugins
@@ -150,7 +164,8 @@
   (update p :project/plugins
           #(mapv (fn [plugin]
                    (if (= plugin-id (:plugin/id plugin))
-                     (if-let [[minimum maximum] (get-in plugin-types [(:plugin/kind plugin) :plugin/parameters parameter])]
+                     (if-let [{minimum :parameter/min maximum :parameter/max}
+                              (get-in plugin-types [(:plugin/kind plugin) :plugin/parameters parameter])]
                        (assoc-in plugin [:plugin/parameters parameter] (max minimum (min maximum value))) plugin)
                      plugin)) %)))
 (defn solo-track-project [p track-id]
@@ -271,7 +286,8 @@
                         (not= (set (keys (:plugin/parameters descriptor)))
                               (set (keys (:plugin/parameters plugin))))
                         (some (fn [[parameter value]]
-                                (let [[minimum maximum] (get-in descriptor [:plugin/parameters parameter])]
+                                (let [{minimum :parameter/min maximum :parameter/max}
+                                      (get-in descriptor [:plugin/parameters parameter])]
                                   (or (nil? minimum) (not (<= minimum value maximum)))))
                               (:plugin/parameters plugin)))]
           [:invalid-plugin (:plugin/id plugin)])

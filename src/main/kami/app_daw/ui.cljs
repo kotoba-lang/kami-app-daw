@@ -519,6 +519,9 @@
    [:button {:on-click #(swap! state update :project daw/add-plugin "master-saturator" :kami/saturator)
              :disabled (some (fn [plugin] (= "master-saturator" (:plugin/id plugin))) (:project/plugins project))}
     "Add AudioWorklet saturator"]
+   [:button {:on-click #(swap! state update :project daw/add-plugin "master-compressor" :kami/compressor)
+             :disabled (some (fn [plugin] (= "master-compressor" (:plugin/id plugin))) (:project/plugins project))}
+    "Add AudioWorklet compressor"]
    (for [plugin (:project/plugins project)]
      ^{:key (:plugin/id plugin)}
      [:span.effect-automation
@@ -527,11 +530,14 @@
                                    :aria-label (str (:plugin/id plugin) " enabled")
                                    :on-change #(swap! state update :project daw/set-plugin-enabled (:plugin/id plugin)
                                                       (.. % -target -checked))}]]
-      [:label "Drive" [:input {:type "number" :min 0.1 :max 8 :step 0.1
-                                 :value (get-in plugin [:plugin/parameters :drive])
-                                 :aria-label (str (:plugin/id plugin) " drive")
-                                 :on-change #(swap! state update :project daw/set-plugin-parameter (:plugin/id plugin) :drive
-                                                    (js/parseFloat (.. % -target -value)))}]]])
+      (for [[parameter descriptor] (get-in daw/plugin-types [(:plugin/kind plugin) :plugin/parameters])]
+        ^{:key parameter}
+        [:label (:parameter/name descriptor)
+         [:input {:type "number" :min (:parameter/min descriptor) :max (:parameter/max descriptor)
+                  :step (:parameter/step descriptor) :value (get-in plugin [:plugin/parameters parameter])
+                  :aria-label (str (:plugin/id plugin) " " (name parameter))
+                  :on-change #(swap! state update :project daw/set-plugin-parameter (:plugin/id plugin) parameter
+                                     (js/parseFloat (.. % -target -value)))}]])])
    (for [bus (:project/buses project)
          :let [end-tick (daw/duration-ticks project) points (:bus/gain-automation bus)
                start-gain (or (:automation/gain (first points)) (:bus/gain bus) 1)
