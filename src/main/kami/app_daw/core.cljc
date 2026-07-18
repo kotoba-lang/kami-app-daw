@@ -168,6 +168,7 @@
                         :makeup-db {:parameter/name "Makeup dB" :parameter/min 0.0 :parameter/max 24.0
                                 :parameter/default 0.0 :parameter/step 0.5}}}})
 (def third-party-source-limit 65536)
+(def plugin-capabilities #{:audio-processing})
 (defn plugin-descriptor [plugin]
   (or (:plugin/descriptor plugin) (get plugin-types (:plugin/kind plugin))))
 (defn valid-plugin-parameter-descriptor? [descriptor]
@@ -187,7 +188,10 @@
                     (not (string? (:plugin/processor descriptor))) (empty? (:plugin/processor descriptor))
                     (not (map? parameters)) (empty? parameters) (> (count parameters) 32)
                     (not (every? keyword? (keys parameters)))
-                    (not (every? valid-plugin-parameter-descriptor? (vals parameters))))
+                    (not (every? valid-plugin-parameter-descriptor? (vals parameters)))
+                    (not (boolean (re-matches #"[0-9a-f]{64}" (or (:package/source-sha256 package) ""))))
+                    (not (set? (:package/capabilities package)))
+                    (not (every? plugin-capabilities (:package/capabilities package))))
             [[:invalid-plugin-manifest]])
           (when (or (not (string? (:package/source package)))
                     (empty? (:package/source package))
@@ -198,6 +202,8 @@
    {:package/version (:plugin/package-version plugin)
     :package/id (:plugin/package-id plugin)
     :package/source (:plugin/source plugin)
+    :package/source-sha256 (:plugin/source-sha256 plugin)
+    :package/capabilities (:plugin/capabilities plugin)
     :package/descriptor (:plugin/descriptor plugin)}))
 (defn plugin-parameter-defaults [plugin-kind]
   (into {} (map (fn [[parameter descriptor]] [parameter (:parameter/default descriptor)]))
@@ -223,6 +229,8 @@
                :plugin/package-id (:package/id package) :plugin/package-version (:package/version package)
                :plugin/processor (:plugin/processor descriptor) :plugin/descriptor descriptor
                :plugin/source (:package/source package) :plugin/enabled? true :plugin/mix 1.0
+               :plugin/source-sha256 (:package/source-sha256 package)
+               :plugin/capabilities (:package/capabilities package)
                :plugin/mix-automation [] :plugin/mix-interpolation :linear :plugin/automation-mode :read
                :plugin/parameters (into {} (map (fn [[parameter parameter-descriptor]]
                                                   [parameter (:parameter/default parameter-descriptor)]))
