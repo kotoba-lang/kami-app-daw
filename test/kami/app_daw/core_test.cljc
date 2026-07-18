@@ -108,6 +108,15 @@
     (is (empty? (daw/validate-project stepped)))
     (is (= [[:invalid-plugin "sat"]]
            (daw/validate-project (assoc-in stepped [:project/plugins 0 :plugin/mix-interpolation] :curve))))))
+(deftest live-plugin-mix-write-coalesces-musical-ticks
+  (let [written (-> (daw/add-plugin p "sat" :kami/saturator)
+                    (daw/append-plugin-mix-automation-point "sat" 960 0.25)
+                    (daw/append-plugin-mix-automation-point "sat" 240 2)
+                    (daw/append-plugin-mix-automation-point "sat" 960 0.8))]
+    (is (= [{:automation/tick 240 :automation/value 1.0}
+            {:automation/tick 960 :automation/value 0.8}]
+           (get-in written [:project/plugins 0 :plugin/mix-automation])))
+    (is (empty? (daw/validate-project written)))))
 (deftest project-authoritative-bus-automation
   (let [automated (daw/set-bus-gain-automation p "master" [{:tick 960 :gain 0.25} {:tick 0 :gain 1.0}])]
     (is (= [{:automation/tick 0 :automation/gain 1.0} {:automation/tick 960 :automation/gain 0.25}]
