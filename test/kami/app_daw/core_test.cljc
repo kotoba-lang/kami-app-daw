@@ -44,3 +44,10 @@
     (is (= ["audio:t"] (daw/missing-asset-ids registered [])))
     (is (empty? (daw/missing-asset-ids registered ["audio:t"])))
     (is (= registered (daw/recover-project (daw/recovery-envelope registered))))))
+(deftest bounded-project-undo-redo
+  (let [p2 (assoc p :project/name "two") history (daw/record-history daw/empty-history p)
+        undone (daw/undo-project p2 history) redone (daw/redo-project (:project undone) (:history undone))]
+    (is (= p (:project undone)))
+    (is (= p2 (:project redone)))
+    (is (= 50 (count (:history/past (reduce (fn [h n] (daw/record-history h (assoc p :n n)))
+                                             daw/empty-history (range 70))))))))

@@ -1,6 +1,21 @@
 (ns kami.app-daw.core)
 
 (def schema "kami.ongaku-project/v1")
+(def history-limit 50)
+(def empty-history {:history/past [] :history/future []})
+(defn record-history [history previous]
+  {:history/past (->> (conj (vec (:history/past history)) previous) (take-last history-limit) vec)
+   :history/future []})
+(defn undo-project [current history]
+  (if-let [previous (peek (:history/past history))]
+    {:project previous :history {:history/past (pop (:history/past history))
+                                 :history/future (conj (vec (:history/future history)) current)}}
+    {:project current :history history}))
+(defn redo-project [current history]
+  (if-let [next-project (peek (:history/future history))]
+    {:project next-project :history {:history/past (conj (vec (:history/past history)) current)
+                                     :history/future (pop (:history/future history))}}
+    {:project current :history history}))
 (defn project [m] (merge {:project/schema schema :project/ppq 480 :project/bpm 120
                            :project/buses [{:bus/id "master" :bus/name "Master" :bus/gain 1.0}]
                            :project/assets {} :project/tracks []} m))

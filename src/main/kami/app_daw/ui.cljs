@@ -7,9 +7,10 @@
                    :track/clips [{:clip/id "chords" :clip/name "Chords" :clip/start-tick 960 :clip/length-ticks 2880}]}
                   {:track/id "voice" :track/name "Voice" :track/color "#c4b5fd" :track/gain 0.9
                    :track/clips [{:clip/id "hook" :clip/name "Hook" :clip/start-tick 2400 :clip/length-ticks 1440}]}]}))
-(defonce state (r/atom {:project sample :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :stem-exporting nil :recording nil :recording-error nil :project-error nil :recovered? false :punch-length-ticks 960 :buffers {} :assets {}}))
+(defonce state (r/atom {:project sample :history daw/empty-history :history-replaying? false :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :stem-exporting nil :recording nil :recording-error nil :project-error nil :recovered? false :punch-length-ticks 960 :buffers {} :assets {}}))
 (defonce meter-timer (atom nil))
 (defonce recorder-runtime (atom nil))
+(defonce shortcuts-installed? (atom false))
 (def recovery-key "kami-app-daw/recovery/v1")
 (defn sha256-file! [file]
   (-> (.arrayBuffer file)
@@ -124,6 +125,26 @@
                (when (not= (:project old) (:project new))
                  (try (.setItem js/localStorage recovery-key (pr-str (daw/recovery-envelope (:project new))))
                       (catch :default error (js/console.warn "DAW autosave failed" error)))))))
+(defn install-history! []
+  (add-watch state ::history
+             (fn [_ _ old new]
+               (when (and (not= (:project old) (:project new)) (not (:history-replaying? new)))
+                 (swap! state update :history daw/record-history (:project old))))))
+(defn undo! []
+  (let [{:keys [project history]} (daw/undo-project (:project @state) (:history @state))]
+    (swap! state assoc :project project :history history :history-replaying? true)
+    (swap! state assoc :history-replaying? false)))
+(defn redo! []
+  (let [{:keys [project history]} (daw/redo-project (:project @state) (:history @state))]
+    (swap! state assoc :project project :history history :history-replaying? true)
+    (swap! state assoc :history-replaying? false)))
+(defn install-shortcuts! []
+  (when-not @shortcuts-installed?
+    (.addEventListener js/window "keydown"
+      (fn [event]
+        (when (and (or (.-metaKey event) (.-ctrlKey event)) (= "z" (.toLowerCase (.-key event))))
+          (.preventDefault event) (if (.-shiftKey event) (redo!) (undo!)))))
+    (reset! shortcuts-installed? true)))
 (defn set-automation! [track endpoint gain]
   (let [end-tick (daw/duration-ticks (:project @state))
         current (or (:track/gain-automation track)
@@ -188,6 +209,8 @@
    [:button {:on-click download-project!} "Save project EDN"]
    [:label "Open project EDN" [:input {:type "file" :accept ".edn,application/edn" :aria-label "Open DAW project EDN" :on-change load-project!}]]
    [:label "Relink audio" [:input {:type "file" :accept "audio/*" :multiple true :aria-label "Relink DAW audio files" :on-change relink-audio!}]]
+   [:button {:on-click undo! :disabled (empty? (get-in @state [:history :history/past])) :aria-label "Undo project edit"} "↶ Undo"]
+   [:button {:on-click redo! :disabled (empty? (get-in @state [:history :history/future])) :aria-label "Redo project edit"} "↷ Redo"]
    [:button {:on-click #(js/navigator.clipboard.writeText (pr-str project))} "Copy EDN"]]
   (when-let [error (:project-error @state)] [:section.meta [:strong (str "Project error: " error)]])
   (when (:recovered? @state) [:section.meta [:strong "Recovered autosaved project"]])
@@ -205,6 +228,6 @@
 (defonce root-node (atom nil))
 (defn init! []
   (when-not @root-node
-    (restore-recovery!) (install-autosave!)
+    (restore-recovery!) (install-history!) (install-autosave!) (install-shortcuts!)
     (reset! root-node (rdom/create-root (.getElementById js/document "app"))))
   (rdom/render @root-node [app]))
