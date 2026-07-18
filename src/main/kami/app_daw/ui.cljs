@@ -16,7 +16,7 @@
 (defonce recorder-runtime (atom nil))
 (defonce midi-access-runtime (atom nil))
 (defonce shortcuts-installed? (atom false))
-(declare stop-meter!)
+(declare stop-meter! start-playback! stop-playback!)
 (def recovery-key "kami-app-daw/recovery/v1")
 (defn send-midi-feedback! [plugin-id value]
   (when-let [access @midi-access-runtime]
@@ -24,10 +24,21 @@
                             (get-in @state [:project :project/midi-mappings]))
             output (array-seq (js/Array.from (.values (or (.-outputs access) (js/Map.)))))]
       (.send output (clj->js (daw/midi-feedback-message mapping value))))))
+(defn send-midi-transport-feedback! [command]
+  (when-let [message (daw/midi-transport-message command)]
+    (when-let [access @midi-access-runtime]
+      (doseq [output (array-seq (js/Array.from (.values (or (.-outputs access) (js/Map.)))))]
+        (.send output (clj->js message))))))
 (defn handle-midi-message! [event]
   (let [data (.-data event) status (aget data 0) data1 (aget data 1) data2 (aget data 2)
         command (bit-and status 0xF0) channel (inc (bit-and status 0x0F))]
-    (when (= command 0xB0)
+    (if-let [transport-command (daw/midi-transport-command status)]
+      (do (case transport-command
+            :start (start-playback! true)
+            :continue (start-playback! false)
+            :stop (stop-playback!))
+          (swap! state assoc :midi-last-message (str "Transport " (name transport-command))))
+      (when (= command 0xB0)
       (when-let [plugin-id (:midi-learning-plugin @state)]
         (swap! state update :project daw/set-midi-cc-mapping (str "midi:" plugin-id) channel data1 plugin-id)
         (swap! state assoc :midi-learning-plugin nil
@@ -40,7 +51,7 @@
           (when (= mode :latch) (swap! state update :mix-latched (fnil conj #{}) plugin-id))
           (swap! state update :project daw/apply-midi-cc channel data1 data2 (:tick @state))
           (send-midi-feedback! plugin-id (/ data2 127.0))
-          (swap! state assoc :midi-last-message (str "Ch " channel " CC " data1 " = " data2)))))))
+          (swap! state assoc :midi-last-message (str "Ch " channel " CC " data1 " = " data2))))))))
 (defn bind-midi-inputs! [access]
   (doseq [input (array-seq (js/Array.from (.values (.-inputs access))))]
     (set! (.-onmidimessage input) handle-midi-message!))
@@ -229,12 +240,18 @@
         take-count (max 1 (:loop-takes @state))]
     (swap! state assoc :recording-error nil :recording-cancelled? false)
     (record-loop-take! track-id comp-id (:tick @state) planned-sec 1 take-count)))
-(defn toggle-play! []
-  (if (:playing? @state)
-    (do (audio/stop!) (stop-meter!) (stop-transport!) (swap! state assoc :playing? false))
+(defn stop-playback! []
+  (audio/stop!) (stop-meter!) (stop-transport!) (swap! state assoc :playing? false)
+  (send-midi-transport-feedback! :stop))
+(defn start-playback! [reset-to-zero?]
+  (when reset-to-zero? (swap! state assoc :tick 0))
+  (when-not (:playing? @state)
     (-> (audio/play! (:project @state) (:buffers @state) (select-keys @state [:cutoff :delay]))
-        (.then #(do (start-meter!) (swap! state assoc :playing? true :project-error nil) (start-transport!)))
+        (.then #(do (start-meter!) (swap! state assoc :playing? true :project-error nil)
+                    (start-transport!) (send-midi-transport-feedback! (if reset-to-zero? :start :continue))))
         (.catch #(swap! state assoc :playing? false :project-error (str "Playback failed: " (.-message %)))))))
+(defn toggle-play! []
+  (if (:playing? @state) (stop-playback!) (start-playback! false)))
 (defn export! []
   (swap! state assoc :exporting? true)
   (-> (audio/export-wav! (:project @state) (:buffers @state)

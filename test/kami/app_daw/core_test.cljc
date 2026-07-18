@@ -155,6 +155,10 @@
         controlled (daw/apply-midi-cc base 1 74 64 720)]
     (is (= "sat" (:target/plugin-id (daw/midi-mapping-for base 1 74))))
     (is (= [176 74 64] (daw/midi-feedback-message (daw/midi-mapping-for base 1 74) (/ 64.0 127.0))))
+    (is (= :start (daw/midi-transport-command 0xFA)))
+    (is (= :continue (daw/midi-transport-command 0xFB)))
+    (is (= :stop (daw/midi-transport-command 0xFC)))
+    (is (= [0xFA] (daw/midi-transport-message :start)))
     (is (<= (Math/abs (- (/ 64.0 127.0) (get-in controlled [:project/plugins 0 :plugin/mix]))) 1.0e-9))
     (is (= [720] (mapv :automation/tick (get-in controlled [:project/plugins 0 :plugin/mix-automation]))))
     (is (= base (daw/apply-midi-cc base 2 74 127 720)))
