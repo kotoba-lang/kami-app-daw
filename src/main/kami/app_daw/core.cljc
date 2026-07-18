@@ -40,6 +40,7 @@
          (/ (* seconds (:project/bpm p) (:project/ppq p)) 60.0))))
 (defn punch-duration-seconds [p length-ticks]
   (tick->seconds p (max 1 length-ticks)))
+(defn monitor-gain [gain] (max 0 (min 1 (or gain 0))))
 (defn move-clip [p clip-id tick]
   (update p :project/tracks
           (fn [tracks] (mapv (fn [track] (update track :track/clips

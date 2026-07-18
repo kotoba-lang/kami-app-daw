@@ -40,7 +40,8 @@
            (daw/validate-project (assoc-in selected [:project/tracks 0 :track/take-lanes 0 :comp/active-take-id] "missing"))))))
 (deftest punch-range-uses-musical-time
   (is (= 1.0 (daw/punch-duration-seconds p 960)))
-  (is (= 0 (daw/seconds->ticks p 0))))
+  (is (= 0 (daw/seconds->ticks p 0)))
+  (is (= [0 0.35 1] (mapv daw/monitor-gain [-1 0.35 4]))))
 (deftest validated-project-persistence
   (is (= p (daw/accept-project p)))
   (is (nil? (daw/accept-project (assoc p :project/schema "foreign/v1"))))

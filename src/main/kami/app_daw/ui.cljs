@@ -8,8 +8,9 @@
                    :track/clips [{:clip/id "chords" :clip/name "Chords" :clip/start-tick 960 :clip/length-ticks 2880}]}
                   {:track/id "voice" :track/name "Voice" :track/color "#c4b5fd" :track/gain 0.9
                    :track/clips [{:clip/id "hook" :clip/name "Hook" :clip/start-tick 2400 :clip/length-ticks 1440}]}]}))
-(defonce state (r/atom {:project sample :history daw/empty-history :history-replaying? false :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :stem-exporting nil :recording nil :recording-loop nil :recording-cancelled? false :recording-error nil :project-error nil :recovered? false :punch-length-ticks 960 :loop-takes 3 :buffers {} :assets {}}))
+(defonce state (r/atom {:project sample :history daw/empty-history :history-replaying? false :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :stem-exporting nil :recording nil :recording-loop nil :recording-cancelled? false :input-monitoring? false :input-monitor-active? false :input-monitor-gain 0.35 :input-monitor-db -96 :recording-error nil :project-error nil :recovered? false :punch-length-ticks 960 :loop-takes 3 :buffers {} :assets {}}))
 (defonce meter-timer (atom nil))
+(defonce input-monitor-timer (atom nil))
 (defonce recorder-runtime (atom nil))
 (defonce shortcuts-installed? (atom false))
 (def recovery-key "kami-app-daw/recovery/v1")
@@ -25,6 +26,24 @@
 (defn stop-meter! []
   (when @meter-timer (js/clearInterval @meter-timer) (reset! meter-timer nil))
   (swap! state assoc :meter-db -96))
+(defn stop-input-monitor! []
+  (when @input-monitor-timer (js/clearInterval @input-monitor-timer) (reset! input-monitor-timer nil))
+  (audio/stop-input-monitor!)
+  (swap! state assoc :input-monitor-active? false :input-monitor-db -96))
+(defn start-input-monitor! [stream]
+  (audio/start-input-monitor! stream (:input-monitor-gain @state))
+  (when @input-monitor-timer (js/clearInterval @input-monitor-timer))
+  (reset! input-monitor-timer (js/setInterval #(swap! state assoc :input-monitor-db (audio/input-monitor-db)) 80))
+  (swap! state assoc :input-monitor-active? true))
+(defn toggle-input-monitor! [enabled]
+  (swap! state assoc :input-monitoring? enabled)
+  (if enabled
+    (when-let [stream (:stream @recorder-runtime)] (start-input-monitor! stream))
+    (stop-input-monitor!)))
+(defn set-input-monitor-gain! [gain]
+  (let [level (daw/monitor-gain gain)]
+    (swap! state assoc :input-monitor-gain level)
+    (audio/set-input-monitor-gain! level)))
 (defn import-track! [track event]
   (when-let [file (aget (.. event -target -files) 0)]
     (let [asset-id (str "audio:" (:track/id track))]
@@ -50,6 +69,7 @@
 (declare record-loop-take!)
 (defn finish-recording! [{:keys [track-id start-tick planned-sec chunks stream stop-timer comp-id take-index remaining]}]
   (when stop-timer (js/clearTimeout stop-timer))
+  (stop-input-monitor!)
   (doseq [media-track (array-seq (.getTracks stream))] (.stop media-track))
   (let [blob (js/Blob. chunks #js {:type "audio/webm"})
         asset-id (str "recording:" comp-id ":" take-index)
@@ -88,11 +108,12 @@
                    (set! (.-ondataavailable recorder) #(when (pos? (.. % -data -size)) (.push chunks (.-data %))))
                    (set! (.-onstop recorder) #(do (reset! recorder-runtime nil) (finish-recording! @session)))
                    (reset! recorder-runtime @session)
+                   (when (:input-monitoring? @state) (start-input-monitor! stream))
                    (swap! state assoc :recording track-id :recording-loop {:take take-index :total (+ take-index remaining -1)})
                    (.start recorder 100)
                    (let [timer (js/setTimeout #(.stop recorder) (* 1000 planned-sec))]
                      (swap! session assoc :stop-timer timer) (swap! recorder-runtime assoc :stop-timer timer))))))
-      (.catch #(swap! state assoc :recording nil :recording-loop nil :recording-error (.-message %)))))
+      (.catch #(do (stop-input-monitor!) (swap! state assoc :recording nil :recording-loop nil :recording-error (.-message %))))))
 (defn start-recording! [track-id]
   (let [comp-id (str "comp:" (.now js/Date))
         planned-sec (daw/punch-duration-seconds (:project @state) (:punch-length-ticks @state))
@@ -259,6 +280,7 @@
       (fn [event]
         (when (and (or (.-metaKey event) (.-ctrlKey event)) (= "z" (.toLowerCase (.-key event))))
           (.preventDefault event) (if (.-shiftKey event) (redo!) (undo!)))))
+    (.addEventListener js/window "beforeunload" (fn [_] (stop-input-monitor!)))
     (reset! shortcuts-installed? true)))
 (defn set-automation! [track endpoint gain]
   (let [end-tick (daw/duration-ticks (:project @state))
@@ -331,6 +353,14 @@
                                    :on-change #(swap! state assoc :punch-length-ticks (max 1 (js/parseInt (.. % -target -value))))}]]
    [:label "Loop takes" [:input {:type "number" :min 1 :max 8 :value (:loop-takes @state) :aria-label "Loop take count"
                                   :on-change #(swap! state assoc :loop-takes (max 1 (min 8 (js/parseInt (.. % -target -value)))))}]]
+   [:label "Input monitor (use headphones)" [:input {:type "checkbox" :checked (:input-monitoring? @state)
+                                                       :aria-label "Enable input monitoring"
+                                                       :on-click #(toggle-input-monitor! (not (:input-monitoring? @state)))}]]
+   [:label "Monitor gain" [:input {:type "range" :min 0 :max 1 :step 0.05 :value (:input-monitor-gain @state)
+                                    :aria-label "Input monitor gain"
+                                    :on-change #(set-input-monitor-gain! (js/parseFloat (.. % -target -value)))}]]
+   [:meter {:min -60 :max 0 :value (max -60 (:input-monitor-db @state))
+            :title (str "Input " (.toFixed (:input-monitor-db @state) 1) " dBFS")}]
    [:button {:on-click export! :disabled (:exporting? @state)} (if (:exporting? @state) "Rendering…" "Export WAV")]
    [:button {:on-click download-project!} "Save project EDN"]
    [:label "Open project EDN" [:input {:type "file" :accept ".edn,application/edn" :aria-label "Open DAW project EDN" :on-change load-project!}]]
@@ -345,6 +375,7 @@
   (when (seq missing) [:section.meta.missing-media [:strong (str "Missing media: " (count missing))] [:span (pr-str missing)]])
   (when-let [error (:recording-error @state)] [:section.meta [:strong (str "Recording error: " error)]])
   (when-let [{:keys [take total]} (:recording-loop @state)] [:section.meta [:strong (str "Capturing loop take " take " / " total)]])
+  (when (:input-monitor-active? @state) [:section.meta [:strong "Input monitor active • headphones recommended"]])
   (when-let [clip (selected-clip project (:selected @state))]
     [:section.meta.clip-editor [:strong (str "Edit • " (:clip/name clip))]
      [:label "Source offset" [:input {:type "number" :min 0 :step 0.05 :value (or (:clip/source-offset-sec clip) 0) :on-change #(edit-selected! :source-offset-sec (js/parseFloat (.. % -target -value)))}]]
