@@ -137,7 +137,7 @@
           (.catch #(swap! state assoc :project-error (str "Package export failed: " (.-message %))))))))
 (defn decode-blob! [blob]
   (js/Promise. (fn [resolve reject]
-                 (try (audio/decode-file! blob resolve)
+                 (try (audio/decode-file! blob resolve reject)
                       (catch :default error (reject error))))))
 (defn unzip-package [array-buffer]
   (let [expanded-bytes (atom 0)]

@@ -34,10 +34,13 @@
         (if (pos? rms) (* 20 (/ (js/Math.log rms) (js/Math.log 10))) -96)))
     -96))
 
-(defn decode-file! [file on-ready]
-  (let [ctx (audio-context)]
-    (-> (.arrayBuffer file) (.then #(.decodeAudioData ctx %))
-        (.then (fn [buffer] (on-ready buffer) (.close ctx))))))
+(defn decode-file!
+  ([file on-ready] (decode-file! file on-ready #(js/console.error "Audio decode failed" %)))
+  ([file on-ready on-error]
+   (let [ctx (audio-context)]
+     (-> (.arrayBuffer file) (.then #(.decodeAudioData ctx %))
+         (.then (fn [buffer] (on-ready buffer) (.close ctx)))
+         (.catch (fn [error] (.close ctx) (on-error error)))))))
 
 (defn waveform [buffer points]
   (let [samples (.getChannelData buffer 0) stride (max 1 (quot (.-length samples) points))]
