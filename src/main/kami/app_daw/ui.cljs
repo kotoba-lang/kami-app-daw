@@ -31,4 +31,8 @@
    (for [track (:project/tracks project)] ^{:key (:track/id track)} [track-row track total])
    [:input.scrub {:type "range" :min 0 :max total :value tick :on-change #(swap! state assoc :tick (js/parseInt (.. % -target -value)))}]]
   [:footer (if-let [errors (seq (daw/validate-project project))] (str "Errors: " errors) "EDN project valid • browser prototype")]]))
-(defn init! [] (rdom/render-root (.getElementById js/document "app") [app]))
+(defonce root-node (atom nil))
+(defn init! []
+  (when-not @root-node
+    (reset! root-node (rdom/create-root (.getElementById js/document "app"))))
+  (rdom/render @root-node [app]))
