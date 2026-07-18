@@ -545,6 +545,19 @@
                                    :aria-label (str (:plugin/id plugin) " wet mix")
                                    :on-change #(swap! state update :project daw/set-plugin-mix (:plugin/id plugin)
                                                       (js/parseFloat (.. % -target -value)))}]]
+        [:label "Write" [:input {:type "checkbox"
+                                  :checked (contains? (:mix-writing @state) (:plugin/id plugin))
+                                  :aria-label (str (:plugin/id plugin) " write wet mix automation")
+                                  :on-change #(swap! state update :mix-writing
+                                                     (if (.. % -target -checked) conj disj) (:plugin/id plugin))}]]
+        [:label "Gesture" [:input {:type "range" :min 0 :max 1 :step 0.01 :value mix-value
+                                    :aria-label (str (:plugin/id plugin) " live wet mix gesture")
+                                    :on-input #(let [value (js/parseFloat (.. % -target -value))]
+                                                 (swap! state update :project daw/set-plugin-mix (:plugin/id plugin) value)
+                                                 (when (and (:playing? @state)
+                                                            (contains? (:mix-writing @state) (:plugin/id plugin)))
+                                                   (swap! state update :project daw/append-plugin-mix-automation-point
+                                                          (:plugin/id plugin) (:tick @state) value)))}]]
         [:label "A→" [:input {:type "number" :min 0 :max 1 :step 0.05 :value mix-start
                                :aria-label (str (:plugin/id plugin) " wet mix automation start")
                                :on-change #(swap! state update :project daw/set-plugin-mix-automation (:plugin/id plugin)

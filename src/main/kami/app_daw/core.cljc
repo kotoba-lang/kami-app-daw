@@ -186,6 +186,17 @@
                                           :automation/value (max 0.0 (min 1.0 value))}))
                                  (sort-by :automation/tick) vec))
                      plugin)) %)))
+(defn append-plugin-mix-automation-point [p plugin-id tick value]
+  (let [tick (max 0 (or tick 0)) value (max 0.0 (min 1.0 (or value 0.0)))]
+    (update p :project/plugins
+            #(mapv (fn [plugin]
+                     (if (= plugin-id (:plugin/id plugin))
+                       (update plugin :plugin/mix-automation
+                               (fn [points]
+                                 (->> (conj (vec (remove (fn [point] (= tick (:automation/tick point))) points))
+                                             {:automation/tick tick :automation/value value})
+                                      (sort-by :automation/tick) vec)))
+                       plugin)) %))))
 (defn set-plugin-mix-interpolation [p plugin-id interpolation]
   (if (contains? #{:linear :step} interpolation)
     (update p :project/plugins
