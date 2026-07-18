@@ -65,6 +65,18 @@
        :playback/source-offset-sec (+ (or (:clip/source-offset-sec clip) 0)
                                       (tick->seconds p (- play-start clip-start)))
        :playback/duration-sec (tick->seconds p (- clip-end play-start))})))
+(defn automation-value-at [points tick tick-key value-key base interpolation]
+  (let [points (sort-by tick-key points)
+        before (last (take-while #(<= (tick-key %) tick) points))
+        after (first (drop-while #(<= (tick-key %) tick) points))]
+    (cond
+      (nil? before) (if (and (= :linear interpolation) after (pos? (tick-key after)) (pos? tick))
+                      (+ base (* (/ tick (tick-key after)) (- (value-key after) base)))
+                      base)
+      (or (= :step interpolation) (nil? after)) (value-key before)
+      :else (let [span (- (tick-key after) (tick-key before))
+                  ratio (if (pos? span) (/ (- tick (tick-key before)) span) 0)]
+              (+ (value-key before) (* ratio (- (value-key after) (value-key before))))))))
 (defn seconds->ticks [p seconds]
   (long (#?(:clj Math/round :cljs js/Math.round)
          (/ (* seconds (:project/bpm p) (:project/ppq p)) 60.0))))

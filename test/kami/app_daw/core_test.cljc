@@ -11,6 +11,13 @@
     (is (= {:playback/delay-sec 0.0 :playback/source-offset-sec 1.25 :playback/duration-sec 1.0}
            (daw/clip-playback-window p clip 1440)))
     (is (nil? (daw/clip-playback-window p clip 2400)))))
+(deftest locate-aware-automation-value
+  (let [points [{:tick 0 :value 0.0} {:tick 960 :value 1.0} {:tick 1920 :value 0.5}]]
+    (is (= 0.25 (daw/automation-value-at points 240 :tick :value 0.8 :linear)))
+    (is (= 0.0 (daw/automation-value-at points 240 :tick :value 0.8 :step)))
+    (is (= 0.8 (daw/automation-value-at [] 240 :tick :value 0.8 :linear)))
+    (is (= 0.5 (daw/automation-value-at [{:tick 480 :value 0.0}] 240 :tick :value 1.0 :linear)))
+    (is (= 0.5 (daw/automation-value-at points 2400 :tick :value 0.8 :linear)))))
 (deftest non-destructive-clip-edit
   (let [edited (daw/edit-clip p "c" {:source-offset-sec 0.25 :fade-in-sec 0.1 :fade-out-sec 0.2})
         clip (get-in edited [:project/tracks 0 :track/clips 0])]

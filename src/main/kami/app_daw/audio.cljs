@@ -63,17 +63,17 @@
         (if (pos? rms) (* 20 (/ (js/Math.log rms) (js/Math.log 10))) -96)))
     -96))
 
-(defn- schedule-param! [param project start base points interpolation]
-  (.setValueAtTime param base start)
-  (doseq [point points]
-    (let [time (+ start (daw/tick->seconds project (:automation/tick point)))]
+(defn- schedule-param! [param project start base points tick-key value-key interpolation locate-tick]
+  (.setValueAtTime param (daw/automation-value-at points locate-tick tick-key value-key base interpolation) start)
+  (doseq [point (filter #(> (tick-key %) locate-tick) points)]
+    (let [time (+ start (daw/tick->seconds project (- (tick-key point) locate-tick)))]
       (if (= :step interpolation)
-        (.setValueAtTime param (:automation/value point) time)
-        (.linearRampToValueAtTime param (:automation/value point) time)))))
-(defn- schedule-effect-param! [param project start base points]
-  (schedule-param! param project start base points :linear))
+        (.setValueAtTime param (value-key point) time)
+        (.linearRampToValueAtTime param (value-key point) time)))))
+(defn- schedule-effect-param! [param project start base points locate-tick]
+  (schedule-param! param project start base points :automation/tick :automation/value :linear locate-tick))
 
-(defn- connect-chain! [ctx destination project effects]
+(defn- connect-chain! [ctx destination project effects locate-tick]
   (let [authority (:project/master-effects project)
         cutoff (or (:filter/cutoff-hz authority) (:cutoff effects) 4200)
         delay-seconds (or (:delay/time-sec authority) (:delay effects) 0.12)
@@ -86,9 +86,9 @@
         mix (.createGain ctx)
         analyser (.createAnalyser ctx)]
     (set! (.-type filter) "lowpass")
-    (schedule-effect-param! (.-frequency filter) project start cutoff (get automation :filter/cutoff-hz))
-    (schedule-effect-param! (.-delayTime delay) project start delay-seconds (get automation :delay/time-sec))
-    (schedule-effect-param! (.-gain feedback) project start feedback-value (get automation :delay/feedback))
+    (schedule-effect-param! (.-frequency filter) project start cutoff (get automation :filter/cutoff-hz) locate-tick)
+    (schedule-effect-param! (.-delayTime delay) project start delay-seconds (get automation :delay/time-sec) locate-tick)
+    (schedule-effect-param! (.-gain feedback) project start feedback-value (get automation :delay/feedback) locate-tick)
     (.connect filter delay) (.connect delay feedback) (.connect feedback delay)
     (set! (.-fftSize analyser) 512)
     (.connect filter mix) (.connect delay mix)
@@ -103,17 +103,17 @@
                             dry (.createGain ctx) wet (.createGain ctx) sum (.createGain ctx)
                             parameters (get-in daw/plugin-types [(:plugin/kind plugin) :plugin/parameters])]
                         (let [interpolation (or (:plugin/mix-interpolation plugin) :linear)]
-                          (schedule-param! (.-gain wet) project start mix-value mix-points interpolation)
+                          (schedule-param! (.-gain wet) project start mix-value mix-points :automation/tick :automation/value interpolation locate-tick)
                           (schedule-param! (.-gain dry) project start (- 1 mix-value)
                                            (mapv #(update % :automation/value (fn [value] (- 1 value))) mix-points)
-                                           interpolation))
+                                           :automation/tick :automation/value interpolation locate-tick))
                         (doseq [[parameter descriptor] parameters
                                 :let [audio-param (.get (.-parameters node) (name parameter))]]
                           (when audio-param
                             (schedule-effect-param!
                              audio-param project start
                              (get-in plugin [:plugin/parameters parameter] (:parameter/default descriptor))
-                             (get-in plugin [:plugin/automation parameter]))))
+                             (get-in plugin [:plugin/automation parameter]) locate-tick)))
                         (.connect input dry) (.connect dry sum)
                         (.connect input node) (.connect node wet) (.connect wet sum)
                         sum)
@@ -155,10 +155,8 @@
         send-delay (.createDelay ctx 1.0) send-feedback (.createGain ctx)]
     (doseq [bus (:project/buses project)
             :let [node (get bus-nodes (:bus/id bus))]]
-      (.setValueAtTime (.-gain node) (or (:bus/gain bus) 1) start)
-      (doseq [point (:bus/gain-automation bus)]
-        (.linearRampToValueAtTime (.-gain node) (:automation/gain point)
-                                  (+ start (daw/tick->seconds project (:automation/tick point))))))
+      (schedule-param! (.-gain node) project start (or (:bus/gain bus) 1)
+                       (:bus/gain-automation bus) :automation/tick :automation/gain :linear locate-tick))
     (set! (.. send-delay -delayTime -value) 0.18) (set! (.. send-feedback -gain -value) 0.32)
     (.connect send-delay send-feedback) (.connect send-feedback send-delay) (.connect send-delay destination)
     (doseq [track (:project/tracks project)
@@ -183,18 +181,13 @@
         (.linearRampToValueAtTime (.-gain gain) level (+ begin fade-in))
         (.setValueAtTime (.-gain gain) level (+ begin (max fade-in (- actual-duration fade-out))))
         (.linearRampToValueAtTime (.-gain gain) 0 (+ begin actual-duration))
-        (set! (.. track-gain -gain -value) (or (:track/gain track) 1))
+        (schedule-param! (.-gain track-gain) project start (or (:track/gain track) 1)
+                         (:track/gain-automation track) :automation/tick :automation/gain :linear locate-tick)
         (set! (.. panner -pan -value) (or (:track/pan track) 0))
-        (doseq [point (:track/gain-automation track)]
-          (.linearRampToValueAtTime (.-gain track-gain) (:automation/gain point)
-                                    (+ start (daw/tick->seconds project (:automation/tick point)))))
         (let [bus (or (get bus-nodes (:track/bus-id track)) default-bus)
               send-gain (.createGain ctx)]
-          (set! (.. send-gain -gain -value) (or (:track/send track) 0))
-          (.setValueAtTime (.-gain send-gain) (or (:track/send track) 0) start)
-          (doseq [point (:track/send-automation track)]
-            (.linearRampToValueAtTime (.-gain send-gain) (:automation/send point)
-                                      (+ start (daw/tick->seconds project (:automation/tick point)))))
+          (schedule-param! (.-gain send-gain) project start (or (:track/send track) 0)
+                           (:track/send-automation track) :automation/tick :automation/send :linear locate-tick)
           (.connect source gain) (.connect gain track-gain) (.connect track-gain panner) (.connect panner bus)
           (.connect panner send-gain) (.connect send-gain send-delay))
         (if buffer (.start source begin offset actual-duration) (.start source begin))
@@ -207,7 +200,7 @@
     (-> (ensure-worklets! ctx project)
         (.then (fn []
                  (let [locate-tick (max 0 (or locate-tick 0))
-                       chain (connect-chain! ctx (.-destination ctx) project {:cutoff cutoff :delay delay})
+                       chain (connect-chain! ctx (.-destination ctx) project {:cutoff cutoff :delay delay} locate-tick)
                        start (schedule! ctx (:input chain) project buffers locate-tick)]
                    (.resume ctx)
                    (reset! runtime {:context ctx :started start :analyser (:analyser chain)})
@@ -238,7 +231,7 @@
         ctx (js/OfflineAudioContext. 2 (js/Math.ceil (* 44100 seconds)) 44100)]
     (-> (ensure-worklets! ctx project)
         (.then (fn []
-                 (let [chain (connect-chain! ctx (.-destination ctx) project {:cutoff cutoff :delay delay})]
+                 (let [chain (connect-chain! ctx (.-destination ctx) project {:cutoff cutoff :delay delay} 0)]
                    (schedule! ctx (:input chain) project buffers 0)
                    (.startRendering ctx)))))))
 
@@ -315,7 +308,7 @@
           ctx (js/OfflineAudioContext. 2 (js/Math.ceil (* 44100 seconds)) 44100)]
       (-> (ensure-worklets! ctx stem)
           (.then (fn []
-                   (let [chain (connect-chain! ctx (.-destination ctx) stem effects)]
+                   (let [chain (connect-chain! ctx (.-destination ctx) stem effects 0)]
                      (schedule! ctx (:input chain) stem buffers 0)
                      (.startRendering ctx))))
           (.then #(wav-blob % 1))))))
