@@ -8,7 +8,7 @@
                    :track/clips [{:clip/id "chords" :clip/name "Chords" :clip/start-tick 960 :clip/length-ticks 2880}]}
                   {:track/id "voice" :track/name "Voice" :track/color "#c4b5fd" :track/gain 0.9
                    :track/clips [{:clip/id "hook" :clip/name "Hook" :clip/start-tick 2400 :clip/length-ticks 1440}]}]}))
-(defonce state (r/atom {:project sample :history daw/empty-history :history-replaying? false :clip-drag nil :clip-preview nil :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :analyzing? false :loudness-report nil :normalize-export? true :target-lufs -14 :true-peak-ceiling-db -1 :stem-exporting nil :stem-bundle-exporting? false :directory-searching? false :directory-result nil :recording nil :recording-loop nil :recording-cancelled? false :input-monitoring? false :input-monitor-active? false :input-monitor-gain 0.35 :input-monitor-db -96 :recording-error nil :project-error nil :recovered? false :punch-length-ticks 960 :loop-takes 3 :mackie-bank 0 :mackie-profile :auto :mackie-active-profile :generic-mcu :mackie-touched-strips #{} :buffers {} :assets {}}))
+(defonce state (r/atom {:project sample :history daw/empty-history :history-replaying? false :clip-drag nil :clip-preview nil :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :analyzing? false :loudness-report nil :normalize-export? true :target-lufs -14 :true-peak-ceiling-db -1 :stem-exporting nil :stem-bundle-exporting? false :directory-searching? false :directory-result nil :recording nil :recording-loop nil :recording-cancelled? false :input-monitoring? false :input-monitor-active? false :input-monitor-gain 0.35 :input-monitor-db -96 :recording-error nil :plugin-package-status nil :project-error nil :recovered? false :punch-length-ticks 960 :loop-takes 3 :mackie-bank 0 :mackie-profile :auto :mackie-active-profile :generic-mcu :mackie-touched-strips #{} :buffers {} :assets {}}))
 (defonce meter-timer (atom nil))
 (defonce transport-timer (atom nil))
 (defonce transport-origin (atom nil))
@@ -18,6 +18,33 @@
 (defonce mackie-time-slot (atom nil))
 (defonce shortcuts-installed? (atom false))
 (declare stop-meter! start-playback! stop-playback!)
+(defn plugin-package [raw]
+  (let [parameters (into {}
+                         (map (fn [[parameter descriptor]]
+                                [(keyword parameter)
+                                 {:parameter/name (get descriptor "name")
+                                  :parameter/min (get descriptor "min")
+                                  :parameter/max (get descriptor "max")
+                                  :parameter/default (get descriptor "default")
+                                  :parameter/step (get descriptor "step")}]))
+                         (get raw "parameters"))]
+    {:package/version (get raw "version") :package/id (get raw "id")
+     :package/source (get raw "source")
+     :package/descriptor {:plugin/name (get raw "name") :plugin/processor (get raw "processor")
+                          :plugin/parameters parameters}}))
+(defn import-plugin-package! [file]
+  (when file
+    (-> (.text file)
+        (.then (fn [text]
+                 (let [package (plugin-package (js->clj (js/JSON.parse text)))
+                       errors (daw/third-party-plugin-package-errors package)]
+                   (if (seq errors)
+                     (swap! state assoc :plugin-package-status (str "Plugin rejected: " errors))
+                     (let [plugin-id (str (:package/id package) "-" (inc (count (get-in @state [:project :project/plugins]))))]
+                       (swap! state update :project daw/add-third-party-plugin plugin-id package)
+                       (swap! state assoc :plugin-package-status
+                              (str "Loaded isolated AudioWorklet package " (:package/id package))))))))
+        (.catch #(swap! state assoc :plugin-package-status (str "Plugin package error: " (.-message %)))))))
 (def recovery-key "kami-app-daw/recovery/v1")
 (defn send-midi-feedback! [plugin-id value]
   (when-let [access @midi-access-runtime]
@@ -701,10 +728,17 @@
    [:button {:on-click #(swap! state update :project daw/add-plugin "master-compressor" :kami/compressor)
              :disabled (some (fn [plugin] (= "master-compressor" (:plugin/id plugin))) (:project/plugins project))}
     "Add AudioWorklet compressor"]
+   [:label "Third-party AudioWorklet package"
+    [:input {:type "file" :accept ".json,application/json" :aria-label "Import third-party AudioWorklet package"
+             :on-change #(import-plugin-package! (aget (.. % -target -files) 0))}]]
+   (when-let [status (:plugin-package-status @state)]
+     [:small {:aria-label "Plugin package status"} status])
    (for [[plugin-index plugin] (map-indexed vector (:project/plugins project))]
      ^{:key (:plugin/id plugin)}
      [:span.effect-automation
       [:strong (:plugin/id plugin)]
+      (when-let [diagnostic (get @audio/plugin-diagnostics (:plugin/id plugin))]
+        [:small {:aria-label (str (:plugin/id plugin) " runtime status")} (name diagnostic)])
       [:button {:aria-label (str "Learn MIDI for " (:plugin/id plugin))
                 :on-click #(swap! state assoc :midi-learning-plugin (:plugin/id plugin))}
        (if (= (:plugin/id plugin) (:midi-learning-plugin @state)) "Move a MIDI control…" "MIDI Learn")]
@@ -802,7 +836,7 @@
                 :on-click #(swap! state update :project daw/move-plugin (:plugin/id plugin) :down)} "↓"]
       [:button {:aria-label (str "Remove " (:plugin/id plugin))
                 :on-click #(swap! state update :project daw/remove-plugin (:plugin/id plugin))} "Remove"]
-      (for [[parameter descriptor] (get-in daw/plugin-types [(:plugin/kind plugin) :plugin/parameters])
+      (for [[parameter descriptor] (:plugin/parameters (daw/plugin-descriptor plugin))
             :let [base (get-in plugin [:plugin/parameters parameter])
                   points (get-in plugin [:plugin/automation parameter])
                   end-tick (daw/duration-ticks project)

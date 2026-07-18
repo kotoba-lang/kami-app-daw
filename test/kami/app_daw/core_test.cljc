@@ -113,6 +113,27 @@
     (is (= [[:invalid-plugin "sat"]]
            (daw/validate-project
             (assoc-in automated [:project/plugins 0 :plugin/mix-automation 0 :automation/value] -0.1))))))
+(deftest third-party-audio-worklet-packages-are-bounded-project-authority
+  (let [package {:package/version 1 :package/id "vendor.gain"
+                 :package/source "class GainProcessor {}\nregisterProcessor('vendor-gain', GainProcessor);"
+                 :package/descriptor
+                 {:plugin/name "Vendor Gain" :plugin/processor "vendor-gain"
+                  :plugin/parameters {:gain {:parameter/name "Gain" :parameter/min 0.0
+                                             :parameter/max 2.0 :parameter/default 1.0
+                                             :parameter/step 0.01}}}}
+        installed (daw/add-third-party-plugin p "vendor-gain-1" package)]
+    (is (empty? (daw/third-party-plugin-package-errors package)))
+    (is (= "vendor.gain" (get-in installed [:project/plugins 0 :plugin/package-id])))
+    (is (= 1.0 (get-in installed [:project/plugins 0 :plugin/parameters :gain])))
+    (is (= 2.0 (get-in (daw/set-plugin-parameter installed "vendor-gain-1" :gain 9)
+                       [:project/plugins 0 :plugin/parameters :gain])))
+    (is (empty? (daw/validate-project installed)))
+    (is (= [[:invalid-plugin-source]]
+           (daw/third-party-plugin-package-errors (assoc package :package/source ""))))
+    (is (= [[:invalid-plugin-manifest]]
+           (daw/third-party-plugin-package-errors (assoc package :package/version 2))))
+    (is (= [[:invalid-plugin "vendor-gain-1"]]
+           (daw/validate-project (assoc-in installed [:project/plugins 0 :plugin/source] ""))))))
 (deftest plugin-mix-interpolation-is-validated-project-authority
   (let [plugin (daw/add-plugin p "sat" :kami/saturator)
         stepped (daw/set-plugin-mix-interpolation plugin "sat" :step)]

@@ -4,6 +4,8 @@
 (defonce runtime (atom nil))
 (defonce monitor-runtime (atom nil))
 (defonce worklet-module-url (atom nil))
+(defonce third-party-module-urls (atom {}))
+(defonce plugin-diagnostics (atom {}))
 (def oscillator-frequencies {"drums" 110 "synth" 261.63 "voice" 329.63})
 
 (def saturator-worklet-source
@@ -18,10 +20,21 @@
                                                      #js {:type "text/javascript"}))]
         (reset! worklet-module-url url) url)))
 
+(defn- third-party-worklet-url [plugin]
+  (let [package-id (:plugin/package-id plugin)]
+    (or (get @third-party-module-urls package-id)
+        (let [url (js/URL.createObjectURL
+                   (js/Blob. #js [(:plugin/source plugin)] #js {:type "text/javascript"}))]
+          (swap! third-party-module-urls assoc package-id url) url))))
 (defn- ensure-worklets! [ctx project]
   (if (seq (filter :plugin/enabled? (:project/plugins project)))
     (if-let [audio-worklet (.-audioWorklet ctx)]
-      (.addModule audio-worklet (worklet-url))
+      (js/Promise.all
+       (clj->js (cons (.addModule audio-worklet (worklet-url))
+                      (for [plugin (:project/plugins project)
+                            :when (and (:plugin/enabled? plugin)
+                                       (= :third-party/audio-worklet (:plugin/kind plugin)))]
+                        (.addModule audio-worklet (third-party-worklet-url plugin))))))
       (js/Promise.reject (js/Error. "AudioWorklet is unavailable in this rendering context")))
     (js/Promise.resolve true)))
 
@@ -101,7 +114,18 @@
                             mix-value (or (:plugin/mix plugin) 1.0)
                             mix-points (:plugin/mix-automation plugin)
                             dry (.createGain ctx) wet (.createGain ctx) sum (.createGain ctx)
-                            parameters (get-in daw/plugin-types [(:plugin/kind plugin) :plugin/parameters])]
+                            parameters (:plugin/parameters (daw/plugin-descriptor plugin))]
+                        (swap! plugin-diagnostics assoc (:plugin/id plugin)
+                               (if (= :third-party/audio-worklet (:plugin/kind plugin)) :awaiting-ready :running))
+                        (.addEventListener node "processorerror"
+                                           (fn [_]
+                                             ;; A failed worklet becomes silent by specification. Restore a unity dry
+                                             ;; path immediately so one third-party processor cannot mute the master.
+                                             (.cancelScheduledValues (.-gain dry) (.-currentTime ctx))
+                                             (.cancelScheduledValues (.-gain wet) (.-currentTime ctx))
+                                             (.setValueAtTime (.-gain dry) 1 (.-currentTime ctx))
+                                             (.setValueAtTime (.-gain wet) 0 (.-currentTime ctx))
+                                             (swap! plugin-diagnostics assoc (:plugin/id plugin) :bypassed-after-fault)))
                         (let [interpolation (or (:plugin/mix-interpolation plugin) :linear)]
                           (schedule-param! (.-gain wet) project start mix-value mix-points :automation/tick :automation/value interpolation locate-tick)
                           (schedule-param! (.-gain dry) project start (- 1 mix-value)
@@ -116,6 +140,22 @@
                              (get-in plugin [:plugin/automation parameter]) locate-tick)))
                         (.connect input dry) (.connect dry sum)
                         (.connect input node) (.connect node wet) (.connect wet sum)
+                        (when (= :third-party/audio-worklet (:plugin/kind plugin))
+                          (let [ready? (atom false)]
+                            (set! (.. node -port -onmessage)
+                                  (fn [event]
+                                    (when (= "kami-ready" (.. event -data -type))
+                                      (reset! ready? true)
+                                      (swap! plugin-diagnostics assoc (:plugin/id plugin) :running))))
+                            (js/setTimeout
+                             (fn []
+                               (when (and (not @ready?) (= :awaiting-ready (get @plugin-diagnostics (:plugin/id plugin))))
+                                 (.cancelScheduledValues (.-gain dry) (.-currentTime ctx))
+                                 (.cancelScheduledValues (.-gain wet) (.-currentTime ctx))
+                                 (.setValueAtTime (.-gain dry) 1 (.-currentTime ctx))
+                                 (.setValueAtTime (.-gain wet) 0 (.-currentTime ctx))
+                                 (swap! plugin-diagnostics assoc (:plugin/id plugin) :bypassed-after-timeout)))
+                             750)))
                         sum)
                       input)) mix (:project/plugins project))]
       (.connect output analyser))
