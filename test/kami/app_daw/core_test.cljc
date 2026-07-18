@@ -34,6 +34,8 @@
   (is (nil? (daw/accept-project [:not :a :project]))))
 (deftest versioned-crash-recovery
   (is (= p (daw/recover-project (daw/recovery-envelope p))))
+  (is (= {:project p :history daw/empty-history}
+         (daw/recover-workspace {:recovery/version 1 :recovery/project p})))
   (is (nil? (daw/recover-project {:recovery/version 999 :recovery/project p})))
   (is (nil? (daw/recover-project {:recovery/version 1 :recovery/project (assoc p :project/schema "foreign/v1")}))))
 (deftest persisted-asset-relink-manifest
@@ -50,4 +52,13 @@
     (is (= p (:project undone)))
     (is (= p2 (:project redone)))
     (is (= 50 (count (:history/past (reduce (fn [h n] (daw/record-history h (assoc p :n n)))
-                                             daw/empty-history (range 70))))))))
+                                             daw/empty-history (range 70))))))
+    (is (= {:project p2 :history history}
+           (daw/recover-workspace (daw/recovery-envelope p2 history))))
+    (is (nil? (daw/recover-workspace
+               (daw/recovery-envelope p2 {:history/past [(assoc p :project/schema "foreign/v1")]
+                                          :history/future []}))))
+    (is (= 50 (count (:history/past
+                      (:history (daw/recover-workspace
+                                 (daw/recovery-envelope p2 {:history/past (vec (repeat 70 p))
+                                                            :history/future []})))))))))

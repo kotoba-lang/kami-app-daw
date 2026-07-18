@@ -112,9 +112,9 @@
 (defn restore-recovery! []
   (when-let [text (.getItem js/localStorage recovery-key)]
     (try
-      (if-let [project (daw/recover-project (reader/read-string text))]
+      (if-let [{:keys [project history]} (daw/recover-workspace (reader/read-string text))]
         (let [first-clip (first (mapcat :track/clips (:project/tracks project)))]
-          (swap! state assoc :project project :selected (:clip/id first-clip)
+          (swap! state assoc :project project :history history :selected (:clip/id first-clip)
                  :tick (or (:clip/start-tick first-clip) 0) :recovered? true :project-error nil))
         (do (.removeItem js/localStorage recovery-key)
             (swap! state assoc :project-error "Discarded invalid recovery data")))
@@ -122,9 +122,12 @@
 (defn install-autosave! []
   (add-watch state ::autosave
              (fn [_ _ old new]
-               (when (not= (:project old) (:project new))
-                 (try (.setItem js/localStorage recovery-key (pr-str (daw/recovery-envelope (:project new))))
-                      (catch :default error (js/console.warn "DAW autosave failed" error)))))))
+               (when (or (not= (:project old) (:project new)) (not= (:history old) (:history new)))
+                 (js/queueMicrotask
+                  (fn []
+                    (try (.setItem js/localStorage recovery-key
+                                   (pr-str (daw/recovery-envelope (:project @state) (:history @state))))
+                         (catch :default error (js/console.warn "DAW autosave failed" error)))))))))
 (defn install-history! []
   (add-watch state ::history
              (fn [_ _ old new]

@@ -9,11 +9,13 @@
 (defn undo-project [current history]
   (if-let [previous (peek (:history/past history))]
     {:project previous :history {:history/past (pop (:history/past history))
-                                 :history/future (conj (vec (:history/future history)) current)}}
+                                 :history/future (->> (conj (vec (:history/future history)) current)
+                                                      (take-last history-limit) vec)}}
     {:project current :history history}))
 (defn redo-project [current history]
   (if-let [next-project (peek (:history/future history))]
-    {:project next-project :history {:history/past (conj (vec (:history/past history)) current)
+    {:project next-project :history {:history/past (->> (conj (vec (:history/past history)) current)
+                                                        (take-last history-limit) vec)
                                      :history/future (pop (:history/future history))}}
     {:project current :history history}))
 (defn project [m] (merge {:project/schema schema :project/ppq 480 :project/bpm 120
@@ -94,8 +96,24 @@
           [:invalid-clip (:clip/id c)]))))
 (defn accept-project [value]
   (when (and (map? value) (empty? (validate-project value))) value))
-(def recovery-version 1)
-(defn recovery-envelope [p] {:recovery/version recovery-version :recovery/project p})
+(def recovery-version 2)
+(defn valid-history [history]
+  (when (and (map? history)
+             (vector? (:history/past history))
+             (vector? (:history/future history))
+             (every? accept-project (concat (:history/past history) (:history/future history))))
+    {:history/past (->> (:history/past history) (take-last history-limit) vec)
+     :history/future (->> (:history/future history) (take-last history-limit) vec)}))
+(defn recovery-envelope
+  ([p] (recovery-envelope p empty-history))
+  ([p history] {:recovery/version recovery-version :recovery/project p :recovery/history history}))
+(defn recover-workspace [value]
+  (when (map? value)
+    (case (:recovery/version value)
+      1 (when-let [p (accept-project (:recovery/project value))] {:project p :history empty-history})
+      2 (when-let [p (accept-project (:recovery/project value))]
+          (when-let [history (valid-history (:recovery/history value))]
+            {:project p :history history}))
+      nil)))
 (defn recover-project [value]
-  (when (and (map? value) (= recovery-version (:recovery/version value)))
-    (accept-project (:recovery/project value))))
+  (:project (recover-workspace value)))
