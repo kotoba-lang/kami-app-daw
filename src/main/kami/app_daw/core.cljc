@@ -183,6 +183,10 @@
 (defn midi-mapping-for [p channel cc]
   (first (filter #(and (= channel (:midi/channel %)) (= cc (:midi/cc %)))
                  (:project/midi-mappings p))))
+(defn midi-feedback-message [mapping value]
+  (when (and mapping (number? value))
+    [(+ 0xB0 (dec (:midi/channel mapping))) (:midi/cc mapping)
+     (long (#?(:clj Math/round :cljs js/Math.round) (* 127 (max 0.0 (min 1.0 value)))))]))
 (defn apply-midi-cc [p channel cc midi-value tick]
   (if-let [mapping (midi-mapping-for p channel cc)]
     (let [value (/ (max 0 (min 127 (or midi-value 0))) 127.0)

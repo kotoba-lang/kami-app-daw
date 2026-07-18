@@ -154,6 +154,7 @@
                  (daw/set-midi-cc-mapping "mix-knob" 1 74 "sat"))
         controlled (daw/apply-midi-cc base 1 74 64 720)]
     (is (= "sat" (:target/plugin-id (daw/midi-mapping-for base 1 74))))
+    (is (= [176 74 64] (daw/midi-feedback-message (daw/midi-mapping-for base 1 74) (/ 64.0 127.0))))
     (is (<= (Math/abs (- (/ 64.0 127.0) (get-in controlled [:project/plugins 0 :plugin/mix]))) 1.0e-9))
     (is (= [720] (mapv :automation/tick (get-in controlled [:project/plugins 0 :plugin/mix-automation]))))
     (is (= base (daw/apply-midi-cc base 2 74 127 720)))

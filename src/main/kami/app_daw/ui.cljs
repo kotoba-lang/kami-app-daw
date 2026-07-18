@@ -18,10 +18,20 @@
 (defonce shortcuts-installed? (atom false))
 (declare stop-meter!)
 (def recovery-key "kami-app-daw/recovery/v1")
+(defn send-midi-feedback! [plugin-id value]
+  (when-let [access @midi-access-runtime]
+    (doseq [mapping (filter #(= plugin-id (:target/plugin-id %))
+                            (get-in @state [:project :project/midi-mappings]))
+            output (array-seq (js/Array.from (.values (or (.-outputs access) (js/Map.)))))]
+      (.send output (clj->js (daw/midi-feedback-message mapping value))))))
 (defn handle-midi-message! [event]
   (let [data (.-data event) status (aget data 0) data1 (aget data 1) data2 (aget data 2)
         command (bit-and status 0xF0) channel (inc (bit-and status 0x0F))]
     (when (= command 0xB0)
+      (when-let [plugin-id (:midi-learning-plugin @state)]
+        (swap! state update :project daw/set-midi-cc-mapping (str "midi:" plugin-id) channel data1 plugin-id)
+        (swap! state assoc :midi-learning-plugin nil
+               :midi-last-message (str "Learned Ch " channel " CC " data1 " → " plugin-id)))
       (when-let [mapping (daw/midi-mapping-for (:project @state) channel data1)]
         (let [plugin-id (:target/plugin-id mapping)
               mode (some (fn [plugin] (when (= plugin-id (:plugin/id plugin))
@@ -29,11 +39,13 @@
                          (get-in @state [:project :project/plugins]))]
           (when (= mode :latch) (swap! state update :mix-latched (fnil conj #{}) plugin-id))
           (swap! state update :project daw/apply-midi-cc channel data1 data2 (:tick @state))
+          (send-midi-feedback! plugin-id (/ data2 127.0))
           (swap! state assoc :midi-last-message (str "Ch " channel " CC " data1 " = " data2)))))))
 (defn bind-midi-inputs! [access]
   (doseq [input (array-seq (js/Array.from (.values (.-inputs access))))]
     (set! (.-onmidimessage input) handle-midi-message!))
-  (swap! state assoc :midi-input-count (.-size (.-inputs access))))
+  (swap! state assoc :midi-input-count (.-size (.-inputs access))
+         :midi-output-count (.-size (or (.-outputs access) (js/Map.)))))
 (defn connect-midi! []
   (if-let [request (.-requestMIDIAccess js/navigator)]
     (-> (.call request js/navigator)
@@ -558,7 +570,8 @@
    [:label "Tempo" [:input {:type "number" :value (:project/bpm project) :on-change #(swap! state assoc-in [:project :project/bpm] (js/parseInt (.. % -target -value)))}]]
    [:button {:on-click connect-midi! :aria-label "Connect MIDI controller"} "Connect MIDI"]
    [:output {:aria-label "MIDI connection status"}
-    (case (:midi-status @state) :connected (str "Connected inputs: " (:midi-input-count @state 0))
+    (case (:midi-status @state) :connected (str "Connected inputs: " (:midi-input-count @state 0)
+                                               " • outputs: " (:midi-output-count @state 0))
           :error "MIDI error" :unsupported "Web MIDI unavailable" "MIDI disconnected")]
    (when-let [message (:midi-last-message @state)] [:output {:aria-label "Last MIDI message"} message])
    (for [[parameter label minimum maximum step]
@@ -592,6 +605,9 @@
      ^{:key (:plugin/id plugin)}
      [:span.effect-automation
       [:strong (:plugin/id plugin)]
+      [:button {:aria-label (str "Learn MIDI for " (:plugin/id plugin))
+                :on-click #(swap! state assoc :midi-learning-plugin (:plugin/id plugin))}
+       (if (= (:plugin/id plugin) (:midi-learning-plugin @state)) "Move a MIDI control…" "MIDI Learn")]
       [:label "MIDI channel" [:input {:type "number" :min 1 :max 16
                                        :value (get-in @state [:midi-map-drafts (:plugin/id plugin) :channel] 1)
                                        :aria-label (str (:plugin/id plugin) " MIDI channel")
@@ -625,8 +641,9 @@
         [:label "Wet mix" [:input {:type "number" :min 0 :max 1 :step 0.05
                                    :value (or (:plugin/mix plugin) 1)
                                    :aria-label (str (:plugin/id plugin) " wet mix")
-                                   :on-change #(swap! state update :project daw/set-plugin-mix (:plugin/id plugin)
-                                                      (js/parseFloat (.. % -target -value)))}]]
+                                   :on-change #(let [value (js/parseFloat (.. % -target -value))]
+                                                 (swap! state update :project daw/set-plugin-mix (:plugin/id plugin) value)
+                                                 (send-midi-feedback! (:plugin/id plugin) value))}]]
         [:label "Automation" [:select {:value (name (or (:plugin/automation-mode plugin) :read))
                                         :aria-label (str (:plugin/id plugin) " automation mode")
                                         :on-change #(let [mode (keyword (.. % -target -value))]
