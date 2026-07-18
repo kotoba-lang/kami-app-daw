@@ -115,6 +115,8 @@
             (assoc-in automated [:project/plugins 0 :plugin/mix-automation 0 :automation/value] -0.1))))))
 (deftest third-party-audio-worklet-packages-are-bounded-project-authority
   (let [package {:package/version 1 :package/id "vendor.gain"
+                 :package/source-sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+                 :package/capabilities #{:audio-processing}
                  :package/source "class GainProcessor {}\nregisterProcessor('vendor-gain', GainProcessor);"
                  :package/descriptor
                  {:plugin/name "Vendor Gain" :plugin/processor "vendor-gain"

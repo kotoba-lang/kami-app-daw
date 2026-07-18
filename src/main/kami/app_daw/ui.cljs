@@ -17,7 +17,7 @@
 (defonce midi-access-runtime (atom nil))
 (defonce mackie-time-slot (atom nil))
 (defonce shortcuts-installed? (atom false))
-(declare stop-meter! start-playback! stop-playback!)
+(declare stop-meter! start-playback! stop-playback! sha256-file!)
 (defn plugin-package [raw]
   (let [parameters (into {}
                          (map (fn [[parameter descriptor]]
@@ -30,20 +30,27 @@
                          (get raw "parameters"))]
     {:package/version (get raw "version") :package/id (get raw "id")
      :package/source (get raw "source")
+     :package/source-sha256 (get raw "sourceSha256")
+     :package/capabilities (set (map keyword (get raw "capabilities")))
      :package/descriptor {:plugin/name (get raw "name") :plugin/processor (get raw "processor")
                           :plugin/parameters parameters}}))
 (defn import-plugin-package! [file]
   (when file
     (-> (.text file)
         (.then (fn [text]
-                 (let [package (plugin-package (js->clj (js/JSON.parse text)))
-                       errors (daw/third-party-plugin-package-errors package)]
-                   (if (seq errors)
-                     (swap! state assoc :plugin-package-status (str "Plugin rejected: " errors))
-                     (let [plugin-id (str (:package/id package) "-" (inc (count (get-in @state [:project :project/plugins]))))]
-                       (swap! state update :project daw/add-third-party-plugin plugin-id package)
-                       (swap! state assoc :plugin-package-status
-                              (str "Loaded isolated AudioWorklet package " (:package/id package))))))))
+                 (let [package (plugin-package (js->clj (js/JSON.parse text)))]
+                   (-> (sha256-file! (js/Blob. #js [(:package/source package)]))
+                       (.then (fn [actual]
+                                (let [errors (daw/third-party-plugin-package-errors package)]
+                                  (cond
+                                    (seq errors) (swap! state assoc :plugin-package-status (str "Plugin rejected: " errors))
+                                    (not= actual (:package/source-sha256 package))
+                                    (swap! state assoc :plugin-package-status "Plugin rejected: source integrity mismatch")
+                                    :else
+                                    (let [plugin-id (str (:package/id package) "-" (inc (count (get-in @state [:project :project/plugins]))))]
+                                      (swap! state update :project daw/add-third-party-plugin plugin-id package)
+                                      (swap! state assoc :plugin-package-status
+                                             (str "Verified AudioWorklet package " (:package/id package))))))))))))
         (.catch #(swap! state assoc :plugin-package-status (str "Plugin package error: " (.-message %)))))))
 (def recovery-key "kami-app-daw/recovery/v1")
 (defn send-midi-feedback! [plugin-id value]
