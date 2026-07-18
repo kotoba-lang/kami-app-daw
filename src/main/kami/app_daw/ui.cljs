@@ -8,7 +8,7 @@
                    :track/clips [{:clip/id "chords" :clip/name "Chords" :clip/start-tick 960 :clip/length-ticks 2880}]}
                   {:track/id "voice" :track/name "Voice" :track/color "#c4b5fd" :track/gain 0.9
                    :track/clips [{:clip/id "hook" :clip/name "Hook" :clip/start-tick 2400 :clip/length-ticks 1440}]}]}))
-(defonce state (r/atom {:project sample :history daw/empty-history :history-replaying? false :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :stem-exporting nil :recording nil :recording-loop nil :recording-cancelled? false :input-monitoring? false :input-monitor-active? false :input-monitor-gain 0.35 :input-monitor-db -96 :recording-error nil :project-error nil :recovered? false :punch-length-ticks 960 :loop-takes 3 :buffers {} :assets {}}))
+(defonce state (r/atom {:project sample :history daw/empty-history :history-replaying? false :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :stem-exporting nil :directory-searching? false :directory-result nil :recording nil :recording-loop nil :recording-cancelled? false :input-monitoring? false :input-monitor-active? false :input-monitor-gain 0.35 :input-monitor-db -96 :recording-error nil :project-error nil :recovered? false :punch-length-ticks 960 :loop-takes 3 :buffers {} :assets {}}))
 (defonce meter-timer (atom nil))
 (defonce input-monitor-timer (atom nil))
 (defonce recorder-runtime (atom nil))
@@ -66,6 +66,42 @@
                      (fn [buffer]
                        (swap! state (fn [s] (-> s (assoc-in [:buffers asset-id] buffer)
                                                  (assoc-in [:assets asset-id] {:name (.-name file) :type (.-type file) :sha256 sha256 :blob file :waveform (audio/waveform buffer 48)}))))))))))))
+(defn scan-audio-directory! [event]
+  (let [files (->> (array-seq (.. event -target -files))
+                   (filter #(.startsWith (or (.-type %) "") "audio/")) vec)]
+    (swap! state assoc :directory-searching? true :directory-result nil :project-error nil)
+    (-> (.all js/Promise
+              (clj->js
+               (map-indexed (fn [index file]
+                              (-> (sha256-file! file)
+                                  (.then (fn [sha256]
+                                           {:file/index index :file/path (or (.-webkitRelativePath file) (.-name file))
+                                            :file/name (.-name file) :file/sha256 sha256 :file/ref file})))) files)))
+        (.then
+         (fn [values]
+           (let [plan (daw/directory-relink-plan (:project @state) (array-seq values))]
+             (-> (.all js/Promise
+                       (clj->js
+                        (map (fn [{:asset/keys [id] :keys [candidate]}]
+                               (let [file (:file/ref candidate)]
+                                 (js/Promise.
+                                  (fn [resolve reject]
+                                    (audio/decode-file! file
+                                                        #(resolve {:asset-id id :candidate candidate :file file :buffer %})
+                                                        reject)))))
+                             (:relink/matches plan))))
+                 (.then (fn [decoded]
+                          (doseq [{:keys [asset-id candidate file buffer]} (array-seq decoded)]
+                            (swap! state (fn [s]
+                                           (-> s (assoc-in [:buffers asset-id] buffer)
+                                               (assoc-in [:assets asset-id]
+                                                         {:name (.-name file) :relative-path (:file/path candidate)
+                                                          :type (.-type file) :sha256 (:file/sha256 candidate) :blob file
+                                                          :waveform (audio/waveform buffer 48)})))))
+                          (swap! state assoc :directory-searching? false
+                                 :directory-result {:matched (count decoded) :missing (:relink/missing plan)
+                                                    :ignored (count (:relink/ignored-paths plan))})))))))
+        (.catch #(swap! state assoc :directory-searching? false :project-error (str "Directory search failed: " (.-message %)))))))
 (declare record-loop-take!)
 (defn finish-recording! [{:keys [track-id start-tick planned-sec chunks stream stop-timer comp-id take-index remaining]}]
   (when stop-timer (js/clearTimeout stop-timer))
@@ -367,10 +403,15 @@
    [:button {:on-click export-package!} "Package project + media"]
    [:label "Open media package" [:input {:type "file" :accept ".zip,.kami.zip,application/zip" :aria-label "Open DAW media package" :on-change open-package!}]]
    [:label "Relink audio" [:input {:type "file" :accept "audio/*" :multiple true :aria-label "Relink DAW audio files" :on-change relink-audio!}]]
+   [:label "Search audio directory" [:input {:type "file" :accept "audio/*" :multiple true :webkitdirectory ""
+                                              :aria-label "Search DAW audio directory" :on-change scan-audio-directory!}]]
    [:button {:on-click undo! :disabled (empty? (get-in @state [:history :history/past])) :aria-label "Undo project edit"} "↶ Undo"]
    [:button {:on-click redo! :disabled (empty? (get-in @state [:history :history/future])) :aria-label "Redo project edit"} "↷ Redo"]
    [:button {:on-click #(js/navigator.clipboard.writeText (pr-str project))} "Copy EDN"]]
   (when-let [error (:project-error @state)] [:section.meta [:strong (str "Project error: " error)]])
+  (when (:directory-searching? @state) [:section.meta [:strong "Searching audio directory…"]])
+  (when-let [{:keys [matched missing ignored]} (:directory-result @state)]
+    [:section.meta [:strong (str "Directory relink: " matched " matched • " (count missing) " missing • " ignored " ignored")]])
   (when (:recovered? @state) [:section.meta [:strong "Recovered autosaved project"]])
   (when (seq missing) [:section.meta.missing-media [:strong (str "Missing media: " (count missing))] [:span (pr-str missing)]])
   (when-let [error (:recording-error @state)] [:section.meta [:strong (str "Recording error: " error)]])

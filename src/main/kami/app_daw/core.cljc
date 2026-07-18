@@ -29,7 +29,24 @@
   (some (fn [[asset-id asset]] (when (= name (:asset/name asset)) asset-id)) (:project/assets p)))
 (defn asset-id-by-signature [p {:keys [name sha256]}]
   (or (when sha256 (some (fn [[asset-id asset]] (when (= sha256 (:asset/sha256 asset)) asset-id)) (:project/assets p)))
-      (asset-id-by-name p name)))
+      (some (fn [[asset-id asset]] (when (and (= name (:asset/name asset)) (nil? (:asset/sha256 asset))) asset-id))
+            (:project/assets p))))
+(defn directory-relink-plan [p candidates]
+  (let [ordered (sort-by (juxt :file/path :file/name :file/index) candidates)
+        matches (->> (:project/assets p)
+                     (sort-by key)
+                     (keep (fn [[asset-id asset]]
+                             (when-let [candidate
+                                        (if-let [expected (:asset/sha256 asset)]
+                                          (first (filter #(= expected (:file/sha256 %)) ordered))
+                                          (first (filter #(= (:asset/name asset) (:file/name %)) ordered)))]
+                               {:asset/id asset-id :candidate candidate})))
+                     vec)
+        matched-ids (set (map :asset/id matches))
+        used-indexes (set (map (comp :file/index :candidate) matches))]
+    {:relink/matches matches
+     :relink/missing (->> (keys (:project/assets p)) (remove matched-ids) sort vec)
+     :relink/ignored-paths (->> ordered (remove #(contains? used-indexes (:file/index %))) (map :file/path) vec)}))
 (defn missing-asset-ids [p loaded-ids]
   (->> (keys (:project/assets p)) (remove (set loaded-ids)) sort vec))
 (defn clip-end [clip] (+ (:clip/start-tick clip) (:clip/length-ticks clip)))
