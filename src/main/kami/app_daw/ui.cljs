@@ -14,9 +14,43 @@
 (defonce transport-origin (atom nil))
 (defonce input-monitor-timer (atom nil))
 (defonce recorder-runtime (atom nil))
+(defonce midi-access-runtime (atom nil))
 (defonce shortcuts-installed? (atom false))
 (declare stop-meter!)
 (def recovery-key "kami-app-daw/recovery/v1")
+(defn handle-midi-message! [event]
+  (let [data (.-data event) status (aget data 0) data1 (aget data 1) data2 (aget data 2)
+        command (bit-and status 0xF0) channel (inc (bit-and status 0x0F))]
+    (when (= command 0xB0)
+      (when-let [mapping (daw/midi-mapping-for (:project @state) channel data1)]
+        (let [plugin-id (:target/plugin-id mapping)
+              mode (some (fn [plugin] (when (= plugin-id (:plugin/id plugin))
+                                        (:plugin/automation-mode plugin)))
+                         (get-in @state [:project :project/plugins]))]
+          (when (= mode :latch) (swap! state update :mix-latched (fnil conj #{}) plugin-id))
+          (swap! state update :project daw/apply-midi-cc channel data1 data2 (:tick @state))
+          (swap! state assoc :midi-last-message (str "Ch " channel " CC " data1 " = " data2)))))))
+(defn bind-midi-inputs! [access]
+  (doseq [input (array-seq (js/Array.from (.values (.-inputs access))))]
+    (set! (.-onmidimessage input) handle-midi-message!))
+  (swap! state assoc :midi-input-count (.-size (.-inputs access))))
+(defn connect-midi! []
+  (if-let [request (.-requestMIDIAccess js/navigator)]
+    (-> (.call request js/navigator)
+        (.then (fn [access]
+                 (reset! midi-access-runtime access)
+                 (bind-midi-inputs! access)
+                 (set! (.-onstatechange access) #(bind-midi-inputs! access))
+                 (swap! state assoc :midi-status :connected :project-error nil)))
+        (.catch #(swap! state assoc :midi-status :error
+                        :project-error (str "MIDI failed: " (.-message %)))))
+    (swap! state assoc :midi-status :unsupported :project-error "Web MIDI is not available")))
+(defn disconnect-midi! []
+  (when-let [access @midi-access-runtime]
+    (doseq [input (array-seq (js/Array.from (.values (.-inputs access))))]
+      (set! (.-onmidimessage input) nil))
+    (set! (.-onstatechange access) nil))
+  (reset! midi-access-runtime nil))
 (defn stop-transport! []
   (when @transport-timer (js/clearInterval @transport-timer))
   (reset! transport-timer nil) (reset! transport-origin nil)
@@ -370,7 +404,7 @@
       (fn [event]
         (when (and (or (.-metaKey event) (.-ctrlKey event)) (= "z" (.toLowerCase (.-key event))))
           (.preventDefault event) (if (.-shiftKey event) (redo!) (undo!)))))
-    (.addEventListener js/window "beforeunload" (fn [_] (stop-input-monitor!)))
+    (.addEventListener js/window "beforeunload" (fn [_] (stop-input-monitor!) (disconnect-midi!)))
     (reset! shortcuts-installed? true)))
 (defn set-automation! [track endpoint gain]
   (let [end-tick (daw/duration-ticks (:project @state))
@@ -522,6 +556,11 @@
     [:meter {:min -60 :max 0 :value (max -60 (:meter-db @state)) :title (str (.toFixed (:meter-db @state) 1) " dBFS")}]]]
   [:section.meta [:label "Project" [:input {:value (:project/name project) :on-change #(swap! state assoc-in [:project :project/name] (.. % -target -value))}]]
    [:label "Tempo" [:input {:type "number" :value (:project/bpm project) :on-change #(swap! state assoc-in [:project :project/bpm] (js/parseInt (.. % -target -value)))}]]
+   [:button {:on-click connect-midi! :aria-label "Connect MIDI controller"} "Connect MIDI"]
+   [:output {:aria-label "MIDI connection status"}
+    (case (:midi-status @state) :connected (str "Connected inputs: " (:midi-input-count @state 0))
+          :error "MIDI error" :unsupported "Web MIDI unavailable" "MIDI disconnected")]
+   (when-let [message (:midi-last-message @state)] [:output {:aria-label "Last MIDI message"} message])
    (for [[parameter label minimum maximum step]
          [[:filter/cutoff-hz "Filter cutoff" 40 20000 10]
           [:delay/time-sec "Delay time" 0 1 0.01]
@@ -553,6 +592,22 @@
      ^{:key (:plugin/id plugin)}
      [:span.effect-automation
       [:strong (:plugin/id plugin)]
+      [:label "MIDI channel" [:input {:type "number" :min 1 :max 16
+                                       :value (get-in @state [:midi-map-drafts (:plugin/id plugin) :channel] 1)
+                                       :aria-label (str (:plugin/id plugin) " MIDI channel")
+                                       :on-change #(swap! state assoc-in [:midi-map-drafts (:plugin/id plugin) :channel]
+                                                          (js/parseInt (.. % -target -value)))}]]
+      [:label "MIDI CC" [:input {:type "number" :min 0 :max 127
+                                  :value (get-in @state [:midi-map-drafts (:plugin/id plugin) :cc] 74)
+                                  :aria-label (str (:plugin/id plugin) " MIDI CC")
+                                  :on-change #(swap! state assoc-in [:midi-map-drafts (:plugin/id plugin) :cc]
+                                                     (js/parseInt (.. % -target -value)))}]]
+      [:button {:aria-label (str "Map MIDI to " (:plugin/id plugin))
+                :on-click #(swap! state update :project daw/set-midi-cc-mapping
+                                  (str "midi:" (:plugin/id plugin))
+                                  (get-in @state [:midi-map-drafts (:plugin/id plugin) :channel] 1)
+                                  (get-in @state [:midi-map-drafts (:plugin/id plugin) :cc] 74)
+                                  (:plugin/id plugin))} "Map MIDI"]
       [:label "Enabled" [:input {:type "checkbox" :checked (:plugin/enabled? plugin)
                                    :aria-label (str (:plugin/id plugin) " enabled")
                                    :on-change #(swap! state update :project daw/set-plugin-enabled (:plugin/id plugin)

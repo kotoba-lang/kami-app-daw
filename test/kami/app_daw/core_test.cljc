@@ -148,6 +148,21 @@
                            (map :automation/value (get-in trimmed [:project/plugins 0 :plugin/mix-automation])))))
     (is (= base (daw/thin-plugin-mix-automation base "sat" -0.1)))
     (is (empty? (daw/validate-project trimmed)))))
+(deftest midi-cc-mapping-controls-and-writes-plugin-mix
+  (let [base (-> (daw/add-plugin p "sat" :kami/saturator)
+                 (daw/set-plugin-automation-mode "sat" :touch)
+                 (daw/set-midi-cc-mapping "mix-knob" 1 74 "sat"))
+        controlled (daw/apply-midi-cc base 1 74 64 720)]
+    (is (= "sat" (:target/plugin-id (daw/midi-mapping-for base 1 74))))
+    (is (<= (Math/abs (- (/ 64.0 127.0) (get-in controlled [:project/plugins 0 :plugin/mix]))) 1.0e-9))
+    (is (= [720] (mapv :automation/tick (get-in controlled [:project/plugins 0 :plugin/mix-automation]))))
+    (is (= base (daw/apply-midi-cc base 2 74 127 720)))
+    (is (empty? (:project/midi-mappings (daw/remove-plugin base "sat"))))
+    (is (empty? (daw/validate-project controlled)))
+    (is (= [:duplicate-midi-cc-mapping]
+           (daw/validate-project (update base :project/midi-mappings conj
+                                         {:midi/id "other" :midi/channel 1 :midi/cc 74
+                                          :target/type :plugin/mix :target/plugin-id "sat"}))))))
 (deftest project-authoritative-bus-automation
   (let [automated (daw/set-bus-gain-automation p "master" [{:tick 960 :gain 0.25} {:tick 0 :gain 1.0}])]
     (is (= [{:automation/tick 0 :automation/gain 1.0} {:automation/tick 960 :automation/gain 0.25}]
