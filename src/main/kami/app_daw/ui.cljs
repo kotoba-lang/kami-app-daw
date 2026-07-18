@@ -159,8 +159,9 @@
 (defn toggle-play! []
   (if (:playing? @state)
     (do (audio/stop!) (stop-meter!) (swap! state assoc :playing? false))
-    (do (audio/play! (:project @state) (:buffers @state) (select-keys @state [:cutoff :delay]))
-        (start-meter!) (swap! state assoc :playing? true))))
+    (-> (audio/play! (:project @state) (:buffers @state) (select-keys @state [:cutoff :delay]))
+        (.then #(do (start-meter!) (swap! state assoc :playing? true :project-error nil)))
+        (.catch #(swap! state assoc :playing? false :project-error (str "Playback failed: " (.-message %)))))))
 (defn export! []
   (swap! state assoc :exporting? true)
   (-> (audio/export-wav! (:project @state) (:buffers @state)
@@ -515,6 +516,22 @@
       [:label "→B" [:input {:type "number" :min minimum :max maximum :step step :value end-value
                               :aria-label (str label " automation end")
                               :on-change #(set-effect-automation! parameter end-tick (js/parseFloat (.. % -target -value)))}]]])
+   [:button {:on-click #(swap! state update :project daw/add-plugin "master-saturator" :kami/saturator)
+             :disabled (some (fn [plugin] (= "master-saturator" (:plugin/id plugin))) (:project/plugins project))}
+    "Add AudioWorklet saturator"]
+   (for [plugin (:project/plugins project)]
+     ^{:key (:plugin/id plugin)}
+     [:span.effect-automation
+      [:strong (:plugin/id plugin)]
+      [:label "Enabled" [:input {:type "checkbox" :checked (:plugin/enabled? plugin)
+                                   :aria-label (str (:plugin/id plugin) " enabled")
+                                   :on-change #(swap! state update :project daw/set-plugin-enabled (:plugin/id plugin)
+                                                      (.. % -target -checked))}]]
+      [:label "Drive" [:input {:type "number" :min 0.1 :max 8 :step 0.1
+                                 :value (get-in plugin [:plugin/parameters :drive])
+                                 :aria-label (str (:plugin/id plugin) " drive")
+                                 :on-change #(swap! state update :project daw/set-plugin-parameter (:plugin/id plugin) :drive
+                                                    (js/parseFloat (.. % -target -value)))}]]])
    (for [bus (:project/buses project)
          :let [end-tick (daw/duration-ticks project) points (:bus/gain-automation bus)
                start-gain (or (:automation/gain (first points)) (:bus/gain bus) 1)

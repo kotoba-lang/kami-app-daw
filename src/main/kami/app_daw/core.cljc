@@ -22,6 +22,7 @@
                            :project/buses [{:bus/id "master" :bus/name "Master" :bus/gain 1.0}]
                            :project/master-effects {:filter/cutoff-hz 4200.0 :delay/time-sec 0.12 :delay/feedback 0.28
                                                     :effect/automation {}}
+                           :project/plugins []
                            :project/assets {} :project/tracks []} m))
 (defn register-asset
   ([p asset-id name] (register-asset p asset-id name nil))
@@ -131,6 +132,27 @@
                             :automation/value (clamp-effect-value parameter value)}))
                    (sort-by :automation/tick) vec))
     p))
+(def plugin-types
+  {:kami/saturator {:plugin/processor "kami-saturator" :plugin/parameters {:drive [0.1 8.0]}}})
+(defn add-plugin [p plugin-id plugin-kind]
+  (if (and (contains? plugin-types plugin-kind)
+           (not (some #(= plugin-id (:plugin/id %)) (:project/plugins p))))
+    (update p :project/plugins conj
+            {:plugin/id plugin-id :plugin/kind plugin-kind :plugin/type :audio-worklet
+             :plugin/processor (get-in plugin-types [plugin-kind :plugin/processor])
+             :plugin/enabled? true :plugin/parameters {:drive 1.0}})
+    p))
+(defn set-plugin-enabled [p plugin-id enabled?]
+  (update p :project/plugins
+          #(mapv (fn [plugin] (if (= plugin-id (:plugin/id plugin))
+                                (assoc plugin :plugin/enabled? (boolean enabled?)) plugin)) %)))
+(defn set-plugin-parameter [p plugin-id parameter value]
+  (update p :project/plugins
+          #(mapv (fn [plugin]
+                   (if (= plugin-id (:plugin/id plugin))
+                     (if-let [[minimum maximum] (get-in plugin-types [(:plugin/kind plugin) :plugin/parameters parameter])]
+                       (assoc-in plugin [:plugin/parameters parameter] (max minimum (min maximum value))) plugin)
+                     plugin)) %)))
 (defn solo-track-project [p track-id]
   (update p :project/tracks #(vec (filter (fn [track] (= track-id (:track/id track))) %))))
 (def stem-bundle-version 1)
@@ -239,6 +261,22 @@
                                 (not= (:automation/value point)
                                       (clamp-effect-value parameter (:automation/value point)))) points))]
           [:invalid-effect-automation parameter])
+        (for [plugin (:project/plugins p)
+              :let [descriptor (get plugin-types (:plugin/kind plugin))]
+              :when (or (not (string? (:plugin/id plugin))) (empty? (:plugin/id plugin))
+                        (nil? descriptor)
+                        (not= :audio-worklet (:plugin/type plugin))
+                        (not= (:plugin/processor descriptor) (:plugin/processor plugin))
+                        (not (boolean? (:plugin/enabled? plugin)))
+                        (not= (set (keys (:plugin/parameters descriptor)))
+                              (set (keys (:plugin/parameters plugin))))
+                        (some (fn [[parameter value]]
+                                (let [[minimum maximum] (get-in descriptor [:plugin/parameters parameter])]
+                                  (or (nil? minimum) (not (<= minimum value maximum)))))
+                              (:plugin/parameters plugin)))]
+          [:invalid-plugin (:plugin/id plugin)])
+        (when (not= (count (:project/plugins p)) (count (set (map :plugin/id (:project/plugins p)))))
+          [:duplicate-plugin-id])
         (let [bus-ids (set (map :bus/id (:project/buses p)))]
           (for [track (:project/tracks p)
                 :when (and (:track/bus-id track) (not (contains? bus-ids (:track/bus-id track))))]
