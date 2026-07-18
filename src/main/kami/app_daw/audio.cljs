@@ -88,6 +88,12 @@
                                             (.connect gain destination) [(:bus/id bus) gain])) (:project/buses project)))
         default-bus (or (get bus-nodes "master") destination)
         send-delay (.createDelay ctx 1.0) send-feedback (.createGain ctx)]
+    (doseq [bus (:project/buses project)
+            :let [node (get bus-nodes (:bus/id bus))]]
+      (.setValueAtTime (.-gain node) (or (:bus/gain bus) 1) start)
+      (doseq [point (:bus/gain-automation bus)]
+        (.linearRampToValueAtTime (.-gain node) (:automation/gain point)
+                                  (+ start (daw/tick->seconds project (:automation/tick point))))))
     (set! (.. send-delay -delayTime -value) 0.18) (set! (.. send-feedback -gain -value) 0.32)
     (.connect send-delay send-feedback) (.connect send-feedback send-delay) (.connect send-delay destination)
     (doseq [track (:project/tracks project)
