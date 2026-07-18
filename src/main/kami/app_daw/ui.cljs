@@ -11,6 +11,7 @@
 (defonce state (r/atom {:project sample :history daw/empty-history :history-replaying? false :clip-drag nil :clip-preview nil :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :analyzing? false :loudness-report nil :normalize-export? true :target-lufs -14 :true-peak-ceiling-db -1 :stem-exporting nil :stem-bundle-exporting? false :directory-searching? false :directory-result nil :recording nil :recording-loop nil :recording-cancelled? false :input-monitoring? false :input-monitor-active? false :input-monitor-gain 0.35 :input-monitor-db -96 :recording-error nil :plugin-package-status nil :project-error nil :recovered? false :punch-length-ticks 960 :loop-takes 3 :mackie-bank 0 :mackie-profile :auto :mackie-active-profile :generic-mcu :mackie-touched-strips #{} :buffers {} :assets {}}))
 (defonce meter-timer (atom nil))
 (defonce pending-plugin-package (r/atom nil))
+(defonce publisher-rotation-drafts (r/atom {}))
 (defonce transport-timer (atom nil))
 (defonce transport-origin (atom nil))
 (defonce input-monitor-timer (atom nil))
@@ -796,9 +797,20 @@
       (str "Trust " (:package/publisher-name package))])
    (for [[publisher-id publisher] (get-in project [:project/trusted-publishers])]
      ^{:key publisher-id}
-     [:button {:aria-label (str "Revoke publisher " publisher-id)
-               :on-click #(swap! state update :project daw/revoke-plugin-publisher publisher-id)}
-      (str "Revoke " (:publisher/name publisher))])
+     [:span
+      [:input {:value (get @publisher-rotation-drafts publisher-id "")
+               :placeholder "New SHA-256 fingerprint"
+               :aria-label (str "New fingerprint for " publisher-id)
+               :on-change #(swap! publisher-rotation-drafts assoc publisher-id (.. % -target -value))}]
+      [:button {:aria-label (str "Rotate publisher " publisher-id)
+                :on-click #(swap! state update :project daw/rotate-plugin-publisher-key publisher-id
+                                  (:publisher/fingerprint publisher)
+                                  (get @publisher-rotation-drafts publisher-id "")
+                                  (long (/ (.now js/Date) 1000)))}
+       (str "Rotate " (:publisher/name publisher))]
+      [:button {:aria-label (str "Revoke publisher " publisher-id)
+                :on-click #(swap! state update :project daw/revoke-plugin-publisher publisher-id)}
+       (str "Revoke " (:publisher/name publisher))]])
    (for [[plugin-index plugin] (map-indexed vector (:project/plugins project))]
      ^{:key (:plugin/id plugin)}
      [:span.effect-automation

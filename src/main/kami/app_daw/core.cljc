@@ -184,6 +184,18 @@
                        (if (= publisher-id (:plugin/publisher-id plugin))
                          (assoc plugin :plugin/enabled? false :plugin/trust :revoked)
                          plugin)) %))))
+(defn rotate-plugin-publisher-key [p publisher-id current-fingerprint new-fingerprint rotated-at]
+  (let [publisher (get-in p [:project/trusted-publishers publisher-id])]
+    (if (and publisher (= current-fingerprint (:publisher/fingerprint publisher))
+             (string? new-fingerprint) (re-matches #"[0-9a-f]{64}" new-fingerprint)
+             (not= current-fingerprint new-fingerprint)
+             (nat-int? rotated-at))
+      (-> p
+          (assoc-in [:project/trusted-publishers publisher-id :publisher/fingerprint] new-fingerprint)
+          (update-in [:project/trusted-publishers publisher-id :publisher/key-history]
+                     (fnil conj []) {:publisher/fingerprint current-fingerprint
+                                     :publisher/retired-at rotated-at}))
+      p)))
 (defn trusted-plugin-package? [p package]
   (= (:package/publisher-fingerprint package)
      (get-in p [:project/trusted-publishers (:package/publisher-id package)
