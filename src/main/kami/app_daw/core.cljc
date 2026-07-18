@@ -212,17 +212,31 @@
   ({0xFA :start 0xFB :continue 0xFC :stop} status))
 (defn midi-transport-message [command]
   (case command :start [0xFA] :continue [0xFB] :stop [0xFC] nil))
-(defn mackie-channel-message [status data1 data2]
-  (let [command (bit-and status 0xF0) strip (bit-and status 0x0F)]
-    (cond
-      (and (= command 0xE0) (< strip 8))
-      {:mackie/action :fader :mackie/strip strip
-       :mackie/value (/ (+ (bit-and data1 0x7F) (bit-shift-left (bit-and data2 0x7F) 7)) 16383.0)}
-      (and (= command 0x90) (pos? data2) (<= 0x08 data1 0x0F))
-      {:mackie/action :solo :mackie/strip (- data1 0x08)}
-      (and (= command 0x90) (pos? data2) (<= 0x10 data1 0x17))
-      {:mackie/action :mute :mackie/strip (- data1 0x10)}
-      :else nil)))
+(defn mackie-bank-offset [current delta track-count]
+  (let [maximum (* 8 (quot (max 0 (dec track-count)) 8))]
+    (max 0 (min maximum (+ (or current 0) delta)))))
+(defn mackie-channel-message
+  ([status data1 data2] (mackie-channel-message status data1 data2 0))
+  ([status data1 data2 bank]
+   (let [command (bit-and status 0xF0) channel-strip (bit-and status 0x0F)
+         strip #(+ bank %)]
+     (cond
+       (and (= command 0x90) (pos? data2) (= data1 0x2E)) {:mackie/action :bank :mackie/delta -8}
+       (and (= command 0x90) (pos? data2) (= data1 0x2F)) {:mackie/action :bank :mackie/delta 8}
+       (and (= command 0xE0) (< channel-strip 8))
+       {:mackie/action :fader :mackie/strip (strip channel-strip) :mackie/local-strip channel-strip
+        :mackie/value (/ (+ (bit-and data1 0x7F) (bit-shift-left (bit-and data2 0x7F) 7)) 16383.0)}
+       (and (= command 0xB0) (<= 0x10 data1 0x17) (not= data2 0x40))
+       (let [local (- data1 0x10) magnitude (bit-and data2 0x3F)]
+         {:mackie/action :pan :mackie/strip (strip local) :mackie/local-strip local
+          :mackie/delta (* 0.02 magnitude (if (< data2 0x40) 1 -1))})
+       (and (= command 0x90) (pos? data2) (<= 0x00 data1 0x07))
+       {:mackie/action :record-arm :mackie/strip (strip data1) :mackie/local-strip data1}
+       (and (= command 0x90) (pos? data2) (<= 0x08 data1 0x0F))
+       {:mackie/action :solo :mackie/strip (strip (- data1 0x08)) :mackie/local-strip (- data1 0x08)}
+       (and (= command 0x90) (pos? data2) (<= 0x10 data1 0x17))
+       {:mackie/action :mute :mackie/strip (strip (- data1 0x10)) :mackie/local-strip (- data1 0x10)}
+       :else nil))))
 (defn apply-mackie-channel [p message]
   (let [strip (:mackie/strip message)]
     (if (and (nat-int? strip) (< strip (count (:project/tracks p))))
@@ -230,18 +244,24 @@
                  (fn [track]
                    (case (:mackie/action message)
                      :fader (assoc track :track/gain (max 0 (min 1 (:mackie/value message))))
+                     :pan (update track :track/pan #(max -1 (min 1 (+ (or % 0) (:mackie/delta message)))))
+                     :record-arm (update track :track/armed? not)
                      :mute (update track :track/mute? not)
                      :solo (update track :track/solo? not)
                      track)))
       p)))
 (defn mackie-feedback-message [message enabled?]
-  (case (:mackie/action message)
+  (let [strip (or (:mackie/local-strip message) (:mackie/strip message))]
+   (case (:mackie/action message)
     :fader (let [value (long (#?(:clj Math/round :cljs js/Math.round)
                                 (* 16383 (max 0 (min 1 (:mackie/value message))))))]
-             [(+ 0xE0 (:mackie/strip message)) (bit-and value 0x7F) (bit-and (bit-shift-right value 7) 0x7F)])
-    :solo [0x90 (+ 0x08 (:mackie/strip message)) (if enabled? 127 0)]
-    :mute [0x90 (+ 0x10 (:mackie/strip message)) (if enabled? 127 0)]
-    nil))
+             [(+ 0xE0 strip) (bit-and value 0x7F) (bit-and (bit-shift-right value 7) 0x7F)])
+    :pan [0xB0 (+ 0x10 strip) (long (#?(:clj Math/round :cljs js/Math.round)
+                                       (* 127 (/ (+ 1 (max -1 (min 1 (:mackie/value message)))) 2))))]
+    :record-arm [0x90 strip (if enabled? 127 0)]
+    :solo [0x90 (+ 0x08 strip) (if enabled? 127 0)]
+    :mute [0x90 (+ 0x10 strip) (if enabled? 127 0)]
+    nil)))
 (defn apply-midi-cc [p channel cc midi-value tick]
   (if-let [mapping (midi-mapping-for p channel cc)]
     (let [value (/ (max 0 (min 127 (or midi-value 0))) 127.0)
