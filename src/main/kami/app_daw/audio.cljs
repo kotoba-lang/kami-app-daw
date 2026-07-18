@@ -146,7 +146,7 @@
                 (recur (inc i) (max peak (js/Math.abs (aget samples i)))) peak)))
           (range points))))
 
-(defn- schedule! [ctx destination project buffers]
+(defn- schedule! [ctx destination project buffers locate-tick]
   (let [start (+ (.-currentTime ctx) 0.05)
         bus-nodes (into {} (map (fn [bus] (let [gain (.createGain ctx)]
                                             (set! (.. gain -gain -value) (or (:bus/gain bus) 1))
@@ -163,13 +163,15 @@
     (.connect send-delay send-feedback) (.connect send-feedback send-delay) (.connect send-delay destination)
     (doseq [track (:project/tracks project)
             :when (not (:track/mute? track))
-            clip (:track/clips track)]
+            clip (:track/clips track)
+            :let [window (daw/clip-playback-window project clip locate-tick)]
+            :when window]
       (let [buffer (get buffers (:clip/asset-id clip))
             source (if buffer (.createBufferSource ctx) (.createOscillator ctx)) gain (.createGain ctx) track-gain (.createGain ctx)
             panner (.createStereoPanner ctx)
-            begin (+ start (daw/tick->seconds project (:clip/start-tick clip)))
-            duration (daw/tick->seconds project (:clip/length-ticks clip))
-            offset (or (:clip/source-offset-sec clip) 0)
+            begin (+ start (:playback/delay-sec window))
+            duration (:playback/duration-sec window)
+            offset (:playback/source-offset-sec window)
             actual-duration (if buffer (min duration (max 0 (- (.-duration buffer) offset))) duration)
             fade-in (min actual-duration (or (:clip/fade-in-sec clip) 0.02))
             fade-out (min (- actual-duration fade-in) (or (:clip/fade-out-sec clip) 0.05))
@@ -199,13 +201,14 @@
         (.stop source (+ begin actual-duration))))
     start))
 
-(defn play! [project buffers {:keys [cutoff delay]}]
+(defn play! [project buffers {:keys [cutoff delay locate-tick]}]
   (stop!)
   (let [ctx (audio-context)]
     (-> (ensure-worklets! ctx project)
         (.then (fn []
-                 (let [chain (connect-chain! ctx (.-destination ctx) project {:cutoff cutoff :delay delay})
-                       start (schedule! ctx (:input chain) project buffers)]
+                 (let [locate-tick (max 0 (or locate-tick 0))
+                       chain (connect-chain! ctx (.-destination ctx) project {:cutoff cutoff :delay delay})
+                       start (schedule! ctx (:input chain) project buffers locate-tick)]
                    (.resume ctx)
                    (reset! runtime {:context ctx :started start :analyser (:analyser chain)})
                    ctx)))
@@ -236,7 +239,7 @@
     (-> (ensure-worklets! ctx project)
         (.then (fn []
                  (let [chain (connect-chain! ctx (.-destination ctx) project {:cutoff cutoff :delay delay})]
-                   (schedule! ctx (:input chain) project buffers)
+                   (schedule! ctx (:input chain) project buffers 0)
                    (.startRendering ctx)))))))
 
 (defn- k-weight! [buffer]
@@ -313,7 +316,7 @@
       (-> (ensure-worklets! ctx stem)
           (.then (fn []
                    (let [chain (connect-chain! ctx (.-destination ctx) stem effects)]
-                     (schedule! ctx (:input chain) stem buffers)
+                     (schedule! ctx (:input chain) stem buffers 0)
                      (.startRendering ctx))))
           (.then #(wav-blob % 1))))))
 
