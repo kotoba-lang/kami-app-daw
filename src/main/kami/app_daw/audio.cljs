@@ -2,6 +2,7 @@
   (:require [kami.app-daw.core :as daw]))
 
 (defonce runtime (atom nil))
+(defonce monitor-runtime (atom nil))
 (def oscillator-frequencies {"drums" 110 "synth" 261.63 "voice" 329.63})
 
 (defn- audio-context []
@@ -11,6 +12,36 @@
 (defn stop! []
   (when-let [ctx (:context @runtime)] (.close ctx))
   (reset! runtime nil))
+
+(defn stop-input-monitor! []
+  (when-let [{:keys [source gain analyser context]} @monitor-runtime]
+    (doseq [node [source gain analyser]] (when node (.disconnect node)))
+    (when context (.close context)))
+  (reset! monitor-runtime nil))
+
+(defn start-input-monitor! [stream level]
+  (stop-input-monitor!)
+  (let [ctx (audio-context) source (.createMediaStreamSource ctx stream)
+        gain (.createGain ctx) analyser (.createAnalyser ctx)]
+    (set! (.. gain -gain -value) (daw/monitor-gain level))
+    (set! (.-fftSize analyser) 512)
+    (.connect source gain) (.connect gain analyser) (.connect analyser (.-destination ctx))
+    (.resume ctx)
+    (reset! monitor-runtime {:context ctx :source source :gain gain :analyser analyser})
+    ctx))
+
+(defn set-input-monitor-gain! [level]
+  (when-let [gain (:gain @monitor-runtime)]
+    (set! (.. gain -gain -value) (daw/monitor-gain level))))
+
+(defn input-monitor-db []
+  (if-let [analyser (:analyser @monitor-runtime)]
+    (let [samples (js/Float32Array. (.-fftSize analyser))]
+      (.getFloatTimeDomainData analyser samples)
+      (let [sum (reduce (fn [acc x] (+ acc (* x x))) 0 (array-seq samples))
+            rms (js/Math.sqrt (/ sum (.-length samples)))]
+        (if (pos? rms) (* 20 (/ (js/Math.log rms) (js/Math.log 10))) -96)))
+    -96))
 
 (defn- connect-chain! [ctx destination cutoff delay-seconds]
   (let [filter (.createBiquadFilter ctx)
