@@ -187,6 +187,10 @@
   (when (and mapping (number? value))
     [(+ 0xB0 (dec (:midi/channel mapping))) (:midi/cc mapping)
      (long (#?(:clj Math/round :cljs js/Math.round) (* 127 (max 0.0 (min 1.0 value)))))]))
+(defn midi-transport-command [status]
+  ({0xFA :start 0xFB :continue 0xFC :stop} status))
+(defn midi-transport-message [command]
+  (case command :start [0xFA] :continue [0xFB] :stop [0xFC] nil))
 (defn apply-midi-cc [p channel cc midi-value tick]
   (if-let [mapping (midi-mapping-for p channel cc)]
     (let [value (/ (max 0 (min 127 (or midi-value 0))) 127.0)
