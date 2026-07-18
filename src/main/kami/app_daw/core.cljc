@@ -154,7 +154,8 @@
     (update p :project/plugins conj
             {:plugin/id plugin-id :plugin/kind plugin-kind :plugin/type :audio-worklet
              :plugin/processor (get-in plugin-types [plugin-kind :plugin/processor])
-             :plugin/enabled? true :plugin/mix 1.0 :plugin/parameters (plugin-parameter-defaults plugin-kind)
+             :plugin/enabled? true :plugin/mix 1.0 :plugin/mix-automation []
+             :plugin/parameters (plugin-parameter-defaults plugin-kind)
              :plugin/automation {}})
     p))
 (defn set-plugin-enabled [p plugin-id enabled?]
@@ -173,6 +174,17 @@
   (update p :project/plugins
           #(mapv (fn [plugin] (if (= plugin-id (:plugin/id plugin))
                                 (assoc plugin :plugin/mix (max 0.0 (min 1.0 mix-value))) plugin)) %)))
+(defn set-plugin-mix-automation [p plugin-id points]
+  (update p :project/plugins
+          #(mapv (fn [plugin]
+                   (if (= plugin-id (:plugin/id plugin))
+                     (assoc plugin :plugin/mix-automation
+                            (->> points
+                                 (mapv (fn [{:keys [tick value]}]
+                                         {:automation/tick (max 0 tick)
+                                          :automation/value (max 0.0 (min 1.0 value))}))
+                                 (sort-by :automation/tick) vec))
+                     plugin)) %)))
 (defn set-plugin-parameter [p plugin-id parameter value]
   (update p :project/plugins
           #(mapv (fn [plugin]
@@ -312,6 +324,11 @@
                         (not (boolean? (:plugin/enabled? plugin)))
                         (let [mix-value (or (:plugin/mix plugin) 1.0)]
                           (not (and (number? mix-value) (<= 0 mix-value 1))))
+                        (let [points (:plugin/mix-automation plugin)]
+                          (and (seq points)
+                               (or (not (apply <= (map :automation/tick points)))
+                                   (some #(or (neg? (:automation/tick %))
+                                              (not (<= 0 (:automation/value %) 1))) points))))
                         (not= (set (keys (:plugin/parameters descriptor)))
                               (set (keys (:plugin/parameters plugin))))
                         (some (fn [[parameter points]]

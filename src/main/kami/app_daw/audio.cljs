@@ -95,10 +95,12 @@
                                                        #js {:numberOfInputs 1 :numberOfOutputs 1
                                                             :outputChannelCount #js [2]})
                             mix-value (or (:plugin/mix plugin) 1.0)
+                            mix-points (:plugin/mix-automation plugin)
                             dry (.createGain ctx) wet (.createGain ctx) sum (.createGain ctx)
                             parameters (get-in daw/plugin-types [(:plugin/kind plugin) :plugin/parameters])]
-                        (set! (.. dry -gain -value) (- 1 mix-value))
-                        (set! (.. wet -gain -value) mix-value)
+                        (schedule-effect-param! (.-gain wet) project start mix-value mix-points)
+                        (schedule-effect-param! (.-gain dry) project start (- 1 mix-value)
+                                                (mapv #(update % :automation/value (fn [value] (- 1 value))) mix-points))
                         (doseq [[parameter descriptor] parameters
                                 :let [audio-param (.get (.-parameters node) (name parameter))]]
                           (when audio-param
