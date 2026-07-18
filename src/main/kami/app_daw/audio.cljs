@@ -94,7 +94,11 @@
                       (let [node (js/AudioWorkletNode. ctx (:plugin/processor plugin)
                                                        #js {:numberOfInputs 1 :numberOfOutputs 1
                                                             :outputChannelCount #js [2]})
+                            mix-value (or (:plugin/mix plugin) 1.0)
+                            dry (.createGain ctx) wet (.createGain ctx) sum (.createGain ctx)
                             parameters (get-in daw/plugin-types [(:plugin/kind plugin) :plugin/parameters])]
+                        (set! (.. dry -gain -value) (- 1 mix-value))
+                        (set! (.. wet -gain -value) mix-value)
                         (doseq [[parameter descriptor] parameters
                                 :let [audio-param (.get (.-parameters node) (name parameter))]]
                           (when audio-param
@@ -102,7 +106,9 @@
                              audio-param project start
                              (get-in plugin [:plugin/parameters parameter] (:parameter/default descriptor))
                              (get-in plugin [:plugin/automation parameter]))))
-                        (.connect input node) node)
+                        (.connect input dry) (.connect dry sum)
+                        (.connect input node) (.connect node wet) (.connect wet sum)
+                        sum)
                       input)) mix (:project/plugins project))]
       (.connect output analyser))
     (.connect analyser destination)
