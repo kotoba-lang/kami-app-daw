@@ -25,6 +25,19 @@
     (is (= ["take-1" "recording:1" 480 1200]
            ((juxt :clip/id :clip/asset-id :clip/start-tick :clip/length-ticks) clip)))
     (is (empty? (daw/validate-project recorded)))))
+(deftest loop-takes-retain-lanes-and-project-active-comp
+  (let [take-1 (daw/add-comp-take p "t" "comp:1" "recording:1" 480 1.0 "take-1" 1)
+        take-2 (daw/add-comp-take take-1 "t" "comp:1" "recording:2" 480 1.0 "take-2" 2)
+        selected (daw/select-comp-take take-2 "t" "comp:1" "take-1")
+        track (get-in selected [:project/tracks 0]) group (first (:track/take-lanes track))]
+    (is (= ["take-1" "take-2"] (mapv :clip/id (:comp/takes group))))
+    (is (= "take-1" (:comp/active-take-id group)))
+    (is (= "recording:1" (:clip/asset-id (last (:track/clips track)))))
+    (is (empty? (daw/validate-project selected)))
+    (is (= [[:invalid-comp-take "t" "comp:1" "take-2"]]
+           (daw/validate-project (assoc-in selected [:project/tracks 0 :track/take-lanes 0 :comp/takes 1 :clip/length-ticks] 0))))
+    (is (= [[:missing-active-comp-take "t" "comp:1"]]
+           (daw/validate-project (assoc-in selected [:project/tracks 0 :track/take-lanes 0 :comp/active-take-id] "missing"))))))
 (deftest punch-range-uses-musical-time
   (is (= 1.0 (daw/punch-duration-seconds p 960)))
   (is (= 0 (daw/seconds->ticks p 0))))

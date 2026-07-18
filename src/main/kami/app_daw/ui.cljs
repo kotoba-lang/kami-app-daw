@@ -8,7 +8,7 @@
                    :track/clips [{:clip/id "chords" :clip/name "Chords" :clip/start-tick 960 :clip/length-ticks 2880}]}
                   {:track/id "voice" :track/name "Voice" :track/color "#c4b5fd" :track/gain 0.9
                    :track/clips [{:clip/id "hook" :clip/name "Hook" :clip/start-tick 2400 :clip/length-ticks 1440}]}]}))
-(defonce state (r/atom {:project sample :history daw/empty-history :history-replaying? false :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :stem-exporting nil :recording nil :recording-error nil :project-error nil :recovered? false :punch-length-ticks 960 :buffers {} :assets {}}))
+(defonce state (r/atom {:project sample :history daw/empty-history :history-replaying? false :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :stem-exporting nil :recording nil :recording-loop nil :recording-cancelled? false :recording-error nil :project-error nil :recovered? false :punch-length-ticks 960 :loop-takes 3 :buffers {} :assets {}}))
 (defonce meter-timer (atom nil))
 (defonce recorder-runtime (atom nil))
 (defonce shortcuts-installed? (atom false))
@@ -47,38 +47,58 @@
                      (fn [buffer]
                        (swap! state (fn [s] (-> s (assoc-in [:buffers asset-id] buffer)
                                                  (assoc-in [:assets asset-id] {:name (.-name file) :type (.-type file) :sha256 sha256 :blob file :waveform (audio/waveform buffer 48)}))))))))))))
-(defn finish-recording! [{:keys [track-id start-tick planned-sec chunks stream stop-timer]}]
+(declare record-loop-take!)
+(defn finish-recording! [{:keys [track-id start-tick planned-sec chunks stream stop-timer comp-id take-index remaining]}]
   (when stop-timer (js/clearTimeout stop-timer))
   (doseq [media-track (array-seq (.getTracks stream))] (.stop media-track))
   (let [blob (js/Blob. chunks #js {:type "audio/webm"})
-        asset-id (str "recording:" (.now js/Date))
-        clip-id (str "take-" (.now js/Date))]
-    (audio/decode-file! blob
-      (fn [buffer]
-        (let [duration planned-sec]
-          (swap! state (fn [s]
-                         (-> s (assoc :recording nil :recording-error nil)
-                             (assoc-in [:buffers asset-id] buffer)
-                             (assoc-in [:assets asset-id] {:name "Recorded take.webm" :type "audio/webm" :blob blob :waveform (audio/waveform buffer 48)})
-                             (update :project daw/register-asset asset-id "Recorded take")
-                             (update :project daw/add-recorded-clip track-id asset-id start-tick duration clip-id)
-                             (assoc :selected clip-id)))))))))
+        asset-id (str "recording:" comp-id ":" take-index)
+        clip-id (str comp-id ":take-" take-index)]
+    (-> (sha256-file! blob)
+        (.then (fn [sha256]
+                 (audio/decode-file!
+                  blob
+                  (fn [buffer]
+                    (swap! state (fn [s]
+                                   (-> s
+                                       (assoc :recording-error nil)
+                                       (assoc-in [:buffers asset-id] buffer)
+                                       (assoc-in [:assets asset-id] {:name (str "Take " take-index ".webm") :type "audio/webm"
+                                                                    :sha256 sha256 :blob blob :waveform (audio/waveform buffer 48)})
+                                       (update :project daw/register-asset asset-id (str "Take " take-index ".webm") sha256)
+                                       (update :project daw/add-comp-take track-id comp-id asset-id start-tick planned-sec clip-id take-index)
+                                       (assoc :selected clip-id))))
+                    (if (and (> remaining 1) (not (:recording-cancelled? @state)))
+                      (record-loop-take! track-id comp-id start-tick planned-sec (inc take-index) (dec remaining))
+                      (swap! state assoc :recording nil :recording-loop nil :recording-cancelled? false)))
+                  (fn [error] (swap! state assoc :recording nil :recording-loop nil :recording-error (.-message error))))))
+        (.catch #(swap! state assoc :recording nil :recording-loop nil :recording-error (.-message %))))))
 (defn stop-recording! []
+  (swap! state assoc :recording-cancelled? true)
   (when-let [recorder (:recorder @recorder-runtime)] (.stop recorder)))
-(defn start-recording! [track-id]
-  (swap! state assoc :recording-error nil)
+(defn record-loop-take! [track-id comp-id start-tick planned-sec take-index remaining]
   (-> (.getUserMedia (.-mediaDevices js/navigator) #js {:audio true})
       (.then (fn [stream]
-               (let [recorder (js/MediaRecorder. stream) chunks (array)
-                     planned-sec (daw/punch-duration-seconds (:project @state) (:punch-length-ticks @state))
-                     session (atom {:track-id track-id :start-tick (:tick @state) :planned-sec planned-sec
-                                    :chunks chunks :stream stream :recorder recorder})]
-                 (set! (.-ondataavailable recorder) #(when (pos? (.. % -data -size)) (.push chunks (.-data %))))
-                 (set! (.-onstop recorder) #(do (reset! recorder-runtime nil) (finish-recording! @session)))
-                 (reset! recorder-runtime @session) (swap! state assoc :recording track-id) (.start recorder 100)
-                 (let [timer (js/setTimeout #(.stop recorder) (* 1000 planned-sec))]
-                   (swap! session assoc :stop-timer timer) (swap! recorder-runtime assoc :stop-timer timer)))))
-      (.catch #(swap! state assoc :recording nil :recording-error (.-message %)))))
+               (if (:recording-cancelled? @state)
+                 (doseq [media-track (array-seq (.getTracks stream))] (.stop media-track))
+                 (let [recorder (js/MediaRecorder. stream) chunks (array)
+                       session (atom {:track-id track-id :start-tick start-tick :planned-sec planned-sec
+                                      :comp-id comp-id :take-index take-index :remaining remaining
+                                      :chunks chunks :stream stream :recorder recorder})]
+                   (set! (.-ondataavailable recorder) #(when (pos? (.. % -data -size)) (.push chunks (.-data %))))
+                   (set! (.-onstop recorder) #(do (reset! recorder-runtime nil) (finish-recording! @session)))
+                   (reset! recorder-runtime @session)
+                   (swap! state assoc :recording track-id :recording-loop {:take take-index :total (+ take-index remaining -1)})
+                   (.start recorder 100)
+                   (let [timer (js/setTimeout #(.stop recorder) (* 1000 planned-sec))]
+                     (swap! session assoc :stop-timer timer) (swap! recorder-runtime assoc :stop-timer timer))))))
+      (.catch #(swap! state assoc :recording nil :recording-loop nil :recording-error (.-message %)))))
+(defn start-recording! [track-id]
+  (let [comp-id (str "comp:" (.now js/Date))
+        planned-sec (daw/punch-duration-seconds (:project @state) (:punch-length-ticks @state))
+        take-count (max 1 (:loop-takes @state))]
+    (swap! state assoc :recording-error nil :recording-cancelled? false)
+    (record-loop-take! track-id comp-id (:tick @state) planned-sec 1 take-count)))
 (defn toggle-play! []
   (if (:playing? @state)
     (do (audio/stop!) (stop-meter!) (swap! state assoc :playing? false))
@@ -260,6 +280,15 @@
               :disabled (and (:recording @state) (not= (:track/id track) (:recording @state)))
               :on-click #(if (= (:track/id track) (:recording @state)) (stop-recording!) (start-recording! (:track/id track)))}
      (if (= (:track/id track) (:recording @state)) "■ Stop take" "● Record")]
+    (for [group (:track/take-lanes track)]
+      ^{:key (:comp/id group)}
+      [:div.comp-lane [:small (str "Comp • " (count (:comp/takes group)) " takes")]
+       (for [take (:comp/takes group)]
+         ^{:key (:clip/id take)}
+         [:button {:aria-label (str "Select " (:track/name track) " comp take " (:clip/take-index take))
+                   :class (when (= (:clip/id take) (:comp/active-take-id group)) "selected")
+                   :on-click #(swap! state update :project daw/select-comp-take (:track/id track) (:comp/id group) (:clip/id take))}
+          (str "T" (:clip/take-index take))])])
     (let [end-tick (daw/duration-ticks (:project @state)) points (:track/gain-automation track)
           start-gain (or (:automation/gain (first points)) (:track/gain track) 1)
           end-gain (or (:automation/gain (last points)) (:track/gain track) 1)]
@@ -300,6 +329,8 @@
    [:label "Delay" [:input {:type "range" :min 0 :max 0.5 :step 0.01 :value (:delay @state) :on-change #(swap! state assoc :delay (js/parseFloat (.. % -target -value)))}]]
    [:label "Punch ticks" [:input {:type "number" :min 1 :step 120 :value (:punch-length-ticks @state) :aria-label "Punch length ticks"
                                    :on-change #(swap! state assoc :punch-length-ticks (max 1 (js/parseInt (.. % -target -value))))}]]
+   [:label "Loop takes" [:input {:type "number" :min 1 :max 8 :value (:loop-takes @state) :aria-label "Loop take count"
+                                  :on-change #(swap! state assoc :loop-takes (max 1 (min 8 (js/parseInt (.. % -target -value)))))}]]
    [:button {:on-click export! :disabled (:exporting? @state)} (if (:exporting? @state) "Rendering…" "Export WAV")]
    [:button {:on-click download-project!} "Save project EDN"]
    [:label "Open project EDN" [:input {:type "file" :accept ".edn,application/edn" :aria-label "Open DAW project EDN" :on-change load-project!}]]
@@ -313,6 +344,7 @@
   (when (:recovered? @state) [:section.meta [:strong "Recovered autosaved project"]])
   (when (seq missing) [:section.meta.missing-media [:strong (str "Missing media: " (count missing))] [:span (pr-str missing)]])
   (when-let [error (:recording-error @state)] [:section.meta [:strong (str "Recording error: " error)]])
+  (when-let [{:keys [take total]} (:recording-loop @state)] [:section.meta [:strong (str "Capturing loop take " take " / " total)]])
   (when-let [clip (selected-clip project (:selected @state))]
     [:section.meta.clip-editor [:strong (str "Edit • " (:clip/name clip))]
      [:label "Source offset" [:input {:type "number" :min 0 :step 0.05 :value (or (:clip/source-offset-sec clip) 0) :on-change #(edit-selected! :source-offset-sec (js/parseFloat (.. % -target -value)))}]]

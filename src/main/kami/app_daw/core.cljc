@@ -75,6 +75,49 @@
     (update p :project/tracks
             #(mapv (fn [track] (if (= track-id (:track/id track))
                                  (update track :track/clips (fnil conj []) clip) track)) %))))
+(defn add-comp-take [p track-id comp-id asset-id start-tick duration-sec clip-id take-index]
+  (let [clip {:clip/id clip-id :clip/name (str "Take " take-index) :clip/asset-id asset-id
+              :clip/start-tick (max 0 start-tick)
+              :clip/length-ticks (max 1 (seconds->ticks p duration-sec))
+              :clip/source-offset-sec 0 :clip/fade-in-sec 0.01 :clip/fade-out-sec 0.03
+              :clip/comp-id comp-id :clip/take-index take-index}]
+    (update p :project/tracks
+            (fn [tracks] (mapv (fn [track]
+                     (if (= track-id (:track/id track))
+                       (let [groups (vec (or (:track/take-lanes track) []))
+                             found? (some (fn [group] (= comp-id (:comp/id group))) groups)
+                             groups' (if found?
+                                       (mapv (fn [group]
+                                               (if (= comp-id (:comp/id group))
+                                                 (-> group (update :comp/takes (fnil conj []) clip)
+                                                     (assoc :comp/active-take-id clip-id))
+                                                 group)) groups)
+                                       (conj groups {:comp/id comp-id :comp/active-take-id clip-id :comp/takes [clip]}))]
+                         (-> track
+                             (assoc :track/take-lanes groups')
+                             (update :track/clips (fn [clips]
+                                                    (conj (vec (remove #(= comp-id (:clip/comp-id %)) clips)) clip)))))
+                       track)) tracks)))))
+(defn select-comp-take [p track-id comp-id clip-id]
+  (update p :project/tracks
+          (fn [tracks] (mapv (fn [track]
+                   (if (= track-id (:track/id track))
+                     (if-let [take (some (fn [group]
+                                          (when (= comp-id (:comp/id group))
+                                            (some (fn [clip] (when (= clip-id (:clip/id clip)) clip)) (:comp/takes group))))
+                                        (:track/take-lanes track))]
+                       (-> track
+                           (update :track/take-lanes
+                                   (fn [groups] (mapv (fn [group] (if (= comp-id (:comp/id group))
+                                                                    (assoc group :comp/active-take-id clip-id) group)) groups)))
+                           (update :track/clips
+                                   (fn [clips] (conj (vec (remove #(= comp-id (:clip/comp-id %)) clips)) take))))
+                       track)
+                     track)) tracks))))
+(defn invalid-clip? [clip]
+  (or (neg? (:clip/start-tick clip)) (not (pos-int? (:clip/length-ticks clip)))
+      (neg? (or (:clip/source-offset-sec clip) 0))
+      (neg? (or (:clip/fade-in-sec clip) 0)) (neg? (or (:clip/fade-out-sec clip) 0))))
 (defn validate-project [p]
   (vec (concat
         (when-not (= schema (:project/schema p)) [:unsupported-schema])
@@ -90,10 +133,14 @@
                 :when (and (:track/bus-id track) (not (contains? bus-ids (:track/bus-id track))))]
             [:missing-bus (:track/id track) (:track/bus-id track)]))
         (for [c (mapcat :track/clips (:project/tracks p))
-              :when (or (neg? (:clip/start-tick c)) (not (pos-int? (:clip/length-ticks c)))
-                        (neg? (or (:clip/source-offset-sec c) 0))
-                        (neg? (or (:clip/fade-in-sec c) 0)) (neg? (or (:clip/fade-out-sec c) 0)))]
-          [:invalid-clip (:clip/id c)]))))
+              :when (invalid-clip? c)]
+          [:invalid-clip (:clip/id c)])
+        (for [track (:project/tracks p) group (:track/take-lanes track) take (:comp/takes group)
+              :when (invalid-clip? take)]
+          [:invalid-comp-take (:track/id track) (:comp/id group) (:clip/id take)])
+        (for [track (:project/tracks p) group (:track/take-lanes track)
+              :when (not (some #(= (:comp/active-take-id group) (:clip/id %)) (:comp/takes group)))]
+          [:missing-active-comp-take (:track/id track) (:comp/id group)]))))
 (defn accept-project [value]
   (when (and (map? value) (empty? (validate-project value))) value))
 (def recovery-version 2)
