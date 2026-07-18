@@ -131,6 +131,30 @@
     p))
 (defn solo-track-project [p track-id]
   (update p :project/tracks #(vec (filter (fn [track] (= track-id (:track/id track))) %))))
+(def stem-bundle-version 1)
+(defn stem-entry-name [index] (str "stems/" index ".wav"))
+(defn stem-bundle-manifest [p]
+  {:stem-bundle/version stem-bundle-version
+   :stem-bundle/project-schema (:project/schema p)
+   :stem-bundle/project-id (:project/id p)
+   :stem-bundle/sample-rate 44100
+   :stem-bundle/bit-depth 16
+   :stem-bundle/timeline-start-tick 0
+   :stem-bundle/timeline-end-tick (duration-ticks p)
+   :stem-bundle/tracks
+   (mapv (fn [index track]
+           {:stem/track-id (:track/id track) :stem/track-name (:track/name track)
+            :stem/channel-layout :mono :stem/entry-name (stem-entry-name index)})
+         (range) (:project/tracks p))})
+(defn accept-stem-bundle-manifest [p manifest entry-names]
+  (let [expected (stem-bundle-manifest p) tracks (:stem-bundle/tracks manifest)]
+    (when (and (= stem-bundle-version (:stem-bundle/version manifest))
+               (= schema (:stem-bundle/project-schema manifest))
+               (= (:project/id p) (:stem-bundle/project-id manifest))
+               (= (:stem-bundle/timeline-end-tick expected) (:stem-bundle/timeline-end-tick manifest))
+               (= (:stem-bundle/tracks expected) tracks)
+               (every? #(contains? entry-names (:stem/entry-name %)) tracks))
+      manifest)))
 (defn route-track [p track-id bus-id send]
   (-> p (set-track track-id :track/bus-id bus-id)
       (set-track track-id :track/send (max 0 (min 1 send)))))

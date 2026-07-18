@@ -14,6 +14,16 @@
     (is (= [0 960] (mapv :automation/tick (get-in automated [:project/tracks 0 :track/gain-automation]))))
     (is (= ["t"] (mapv :track/id (:project/tracks (daw/solo-track-project automated "t")))))
     (is (empty? (daw/validate-project automated)))))
+(deftest deterministic-stem-bundle-manifest
+  (let [manifest (daw/stem-bundle-manifest p)]
+    (is (= [1 daw/schema 44100 16 960]
+           ((juxt :stem-bundle/version :stem-bundle/project-schema :stem-bundle/sample-rate
+                  :stem-bundle/bit-depth :stem-bundle/timeline-end-tick) manifest)))
+    (is (= [{:stem/track-id "t" :stem/track-name nil :stem/channel-layout :mono
+             :stem/entry-name "stems/0.wav"}]
+           (:stem-bundle/tracks manifest)))
+    (is (= manifest (daw/accept-stem-bundle-manifest p manifest #{"stems/0.wav"})))
+    (is (nil? (daw/accept-stem-bundle-manifest p manifest #{})))))
 (deftest project-authoritative-bus-automation
   (let [automated (daw/set-bus-gain-automation p "master" [{:tick 960 :gain 0.25} {:tick 0 :gain 1.0}])]
     (is (= [{:automation/tick 0 :automation/gain 1.0} {:automation/tick 960 :automation/gain 0.25}]
