@@ -3,7 +3,23 @@
 
 (defonce runtime (atom nil))
 (defonce monitor-runtime (atom nil))
+(defonce worklet-module-url (atom nil))
 (def oscillator-frequencies {"drums" 110 "synth" 261.63 "voice" 329.63})
+
+(def saturator-worklet-source
+  "class KamiSaturator extends AudioWorkletProcessor {\n  static get parameterDescriptors() { return [{name: 'drive', defaultValue: 1, minValue: 0.1, maxValue: 8, automationRate: 'k-rate'}]; }\n  process(inputs, outputs, parameters) {\n    const input = inputs[0]; const output = outputs[0]; const drive = parameters.drive[0]; const norm = Math.tanh(drive);\n    for (let channel = 0; channel < output.length; channel++) { const source = input[channel] || input[0]; if (!source) continue; for (let i = 0; i < output[channel].length; i++) output[channel][i] = Math.tanh(source[i] * drive) / norm; }\n    return true;\n  }\n}\nregisterProcessor('kami-saturator', KamiSaturator);")
+
+(defn- worklet-url []
+  (or @worklet-module-url
+      (let [url (js/URL.createObjectURL (js/Blob. #js [saturator-worklet-source] #js {:type "text/javascript"}))]
+        (reset! worklet-module-url url) url)))
+
+(defn- ensure-worklets! [ctx project]
+  (if (seq (filter :plugin/enabled? (:project/plugins project)))
+    (if-let [audio-worklet (.-audioWorklet ctx)]
+      (.addModule audio-worklet (worklet-url))
+      (js/Promise.reject (js/Error. "AudioWorklet is unavailable in this rendering context")))
+    (js/Promise.resolve true)))
 
 (defn- audio-context []
   (let [Ctor (or (.-AudioContext js/window) (.-webkitAudioContext js/window))]
@@ -59,6 +75,7 @@
         filter (.createBiquadFilter ctx)
         delay (.createDelay ctx 1.0)
         feedback (.createGain ctx)
+        mix (.createGain ctx)
         analyser (.createAnalyser ctx)]
     (set! (.-type filter) "lowpass")
     (schedule-effect-param! (.-frequency filter) project start cutoff (get automation :filter/cutoff-hz))
@@ -66,8 +83,20 @@
     (schedule-effect-param! (.-gain feedback) project start feedback-value (get automation :delay/feedback))
     (.connect filter delay) (.connect delay feedback) (.connect feedback delay)
     (set! (.-fftSize analyser) 512)
-    (.connect filter analyser) (.connect delay analyser) (.connect analyser destination)
-    {:input filter :analyser analyser :filter filter :delay delay :feedback feedback}))
+    (.connect filter mix) (.connect delay mix)
+    (let [output (reduce
+                  (fn [input plugin]
+                    (if (:plugin/enabled? plugin)
+                      (let [node (js/AudioWorkletNode. ctx (:plugin/processor plugin)
+                                                       #js {:numberOfInputs 1 :numberOfOutputs 1
+                                                            :outputChannelCount #js [2]})
+                            drive (.get (.-parameters node) "drive")]
+                        (set! (.-value drive) (get-in plugin [:plugin/parameters :drive] 1.0))
+                        (.connect input node) node)
+                      input)) mix (:project/plugins project))]
+      (.connect output analyser))
+    (.connect analyser destination)
+    {:input filter :analyser analyser :filter filter :delay delay :feedback feedback :mix mix}))
 
 (defn meter-db []
   (if-let [analyser (:analyser @runtime)]
@@ -148,12 +177,15 @@
 
 (defn play! [project buffers {:keys [cutoff delay]}]
   (stop!)
-  (let [ctx (audio-context)
-        chain (connect-chain! ctx (.-destination ctx) project {:cutoff cutoff :delay delay})
-        start (schedule! ctx (:input chain) project buffers)]
-    (.resume ctx)
-    (reset! runtime {:context ctx :started start :analyser (:analyser chain)})
-    ctx))
+  (let [ctx (audio-context)]
+    (-> (ensure-worklets! ctx project)
+        (.then (fn []
+                 (let [chain (connect-chain! ctx (.-destination ctx) project {:cutoff cutoff :delay delay})
+                       start (schedule! ctx (:input chain) project buffers)]
+                   (.resume ctx)
+                   (reset! runtime {:context ctx :started start :analyser (:analyser chain)})
+                   ctx)))
+        (.catch (fn [error] (.close ctx) (throw error))))))
 
 (defn- write-string! [view offset value]
   (doseq [i (range (count value))] (.setUint8 view (+ offset i) (.charCodeAt value i))))
@@ -176,10 +208,12 @@
 
 (defn- render-project! [project buffers {:keys [cutoff delay]}]
   (let [seconds (+ 1 (daw/tick->seconds project (daw/duration-ticks project)))
-        ctx (js/OfflineAudioContext. 2 (js/Math.ceil (* 44100 seconds)) 44100)
-        chain (connect-chain! ctx (.-destination ctx) project {:cutoff cutoff :delay delay})]
-    (schedule! ctx (:input chain) project buffers)
-    (.startRendering ctx)))
+        ctx (js/OfflineAudioContext. 2 (js/Math.ceil (* 44100 seconds)) 44100)]
+    (-> (ensure-worklets! ctx project)
+        (.then (fn []
+                 (let [chain (connect-chain! ctx (.-destination ctx) project {:cutoff cutoff :delay delay})]
+                   (schedule! ctx (:input chain) project buffers)
+                   (.startRendering ctx)))))))
 
 (defn- k-weight! [buffer]
   (let [ctx (js/OfflineAudioContext. (.-numberOfChannels buffer) (.-length buffer) (.-sampleRate buffer))
@@ -251,10 +285,13 @@
 (defn render-track-wav! [project track-id buffers effects]
   (let [stem (daw/solo-track-project project track-id)]
     (let [seconds (+ 1 (daw/tick->seconds project (daw/duration-ticks project)))
-          ctx (js/OfflineAudioContext. 2 (js/Math.ceil (* 44100 seconds)) 44100)
-          chain (connect-chain! ctx (.-destination ctx) stem effects)]
-      (schedule! ctx (:input chain) stem buffers)
-      (-> (.startRendering ctx) (.then #(wav-blob % 1))))))
+          ctx (js/OfflineAudioContext. 2 (js/Math.ceil (* 44100 seconds)) 44100)]
+      (-> (ensure-worklets! ctx stem)
+          (.then (fn []
+                   (let [chain (connect-chain! ctx (.-destination ctx) stem effects)]
+                     (schedule! ctx (:input chain) stem buffers)
+                     (.startRendering ctx))))
+          (.then #(wav-blob % 1))))))
 
 (defn render-stems! [project buffers effects]
   (reduce (fn [promise track]

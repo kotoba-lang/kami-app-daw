@@ -31,6 +31,20 @@
     (is (empty? (daw/validate-project left)))
     (is (= [[:invalid-track-pan "t"]]
            (daw/validate-project (assoc-in p [:project/tracks 0 :track/pan] 1.1))))))
+(deftest project-authoritative-audio-worklet-plugin
+  (let [plugged (-> p
+                    (daw/add-plugin "sat" :kami/saturator)
+                    (daw/set-plugin-parameter "sat" :drive 20)
+                    (daw/set-plugin-enabled "sat" false))
+        plugin (first (:project/plugins plugged))]
+    (is (= ["sat" :kami/saturator :audio-worklet "kami-saturator" false 8.0]
+           [(:plugin/id plugin) (:plugin/kind plugin) (:plugin/type plugin) (:plugin/processor plugin)
+            (:plugin/enabled? plugin) (get-in plugin [:plugin/parameters :drive])]))
+    (is (empty? (daw/validate-project plugged)))
+    (is (= [:duplicate-plugin-id]
+           (daw/validate-project (update plugged :project/plugins conj plugin))))
+    (is (= [[:invalid-plugin "sat"]]
+           (daw/validate-project (assoc-in plugged [:project/plugins 0 :plugin/processor] "unknown"))))))
 (deftest project-authoritative-bus-automation
   (let [automated (daw/set-bus-gain-automation p "master" [{:tick 960 :gain 0.25} {:tick 0 :gain 1.0}])]
     (is (= [{:automation/tick 0 :automation/gain 1.0} {:automation/tick 960 :automation/gain 0.25}]
