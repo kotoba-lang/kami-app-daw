@@ -10,6 +10,7 @@
                    :track/clips [{:clip/id "hook" :clip/name "Hook" :clip/start-tick 2400 :clip/length-ticks 1440}]}]}))
 (defonce state (r/atom {:project sample :history daw/empty-history :history-replaying? false :clip-drag nil :clip-preview nil :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :analyzing? false :loudness-report nil :normalize-export? true :target-lufs -14 :true-peak-ceiling-db -1 :stem-exporting nil :stem-bundle-exporting? false :directory-searching? false :directory-result nil :recording nil :recording-loop nil :recording-cancelled? false :input-monitoring? false :input-monitor-active? false :input-monitor-gain 0.35 :input-monitor-db -96 :recording-error nil :plugin-package-status nil :project-error nil :recovered? false :punch-length-ticks 960 :loop-takes 3 :mackie-bank 0 :mackie-profile :auto :mackie-active-profile :generic-mcu :mackie-touched-strips #{} :buffers {} :assets {}}))
 (defonce meter-timer (atom nil))
+(defonce pending-plugin-package (r/atom nil))
 (defonce transport-timer (atom nil))
 (defonce transport-origin (atom nil))
 (defonce input-monitor-timer (atom nil))
@@ -32,8 +33,49 @@
      :package/source (get raw "source")
      :package/source-sha256 (get raw "sourceSha256")
      :package/capabilities (set (map keyword (get raw "capabilities")))
+     :package/publisher-id (get-in raw ["publisher" "id"])
+     :package/publisher-name (get-in raw ["publisher" "name"])
+     :package/publisher-key (get-in raw ["publisher" "publicKey"])
+     :package/publisher-fingerprint (get-in raw ["publisher" "fingerprint"])
+     :package/signature (get raw "signature")
      :package/descriptor {:plugin/name (get raw "name") :plugin/processor (get raw "processor")
                           :plugin/parameters parameters}}))
+(defn base64-bytes [value]
+  (let [binary (js/atob value) bytes (js/Uint8Array. (count binary))]
+    (doseq [index (range (count binary))]
+      (aset bytes index (.charCodeAt binary index)))
+    bytes))
+(defn sha256-text! [value]
+  (-> (.digest (.-subtle js/crypto) "SHA-256" (.encode (js/TextEncoder.) value))
+      (.then (fn [buffer]
+               (apply str (map #(let [hex (.toString % 16)]
+                                  (if (= 1 (count hex)) (str "0" hex) hex))
+                               (array-seq (js/Uint8Array. buffer))))))))
+(defn verify-plugin-publisher! [package]
+  (let [key-json (js/JSON.stringify (clj->js (:package/publisher-key package)))]
+    (-> (js/Promise.all
+         #js [(.importKey (.-subtle js/crypto) "jwk" (clj->js (:package/publisher-key package))
+                          #js {:name "ECDSA" :namedCurve "P-256"} false #js ["verify"])
+              (sha256-text! key-json)])
+        (.then (fn [values]
+                 (let [key (aget values 0) fingerprint (aget values 1)]
+                   (if (not= fingerprint (:package/publisher-fingerprint package))
+                     false
+                     (.verify (.-subtle js/crypto) #js {:name "ECDSA" :hash "SHA-256"} key
+                              (base64-bytes (:package/signature package))
+                              (.encode (js/TextEncoder.) (:package/source-sha256 package)))))))
+        (.catch (fn [_] false)))))
+(defn install-plugin-package! [package]
+  (let [plugin-id (str (:package/id package) "-" (inc (count (get-in @state [:project :project/plugins]))))]
+    (swap! state update :project daw/add-third-party-plugin plugin-id package)
+    (reset! pending-plugin-package nil)
+    (swap! state assoc :plugin-package-status (str "Verified signed package " (:package/id package)))))
+(defn trust-pending-plugin-publisher! []
+  (when-let [package @pending-plugin-package]
+    (swap! state update :project daw/trust-plugin-publisher
+           (:package/publisher-id package) (:package/publisher-fingerprint package)
+           (:package/publisher-name package))
+    (install-plugin-package! package)))
 (defn import-plugin-package! [file]
   (when file
     (-> (.text file)
@@ -47,10 +89,18 @@
                                     (not= actual (:package/source-sha256 package))
                                     (swap! state assoc :plugin-package-status "Plugin rejected: source integrity mismatch")
                                     :else
-                                    (let [plugin-id (str (:package/id package) "-" (inc (count (get-in @state [:project :project/plugins]))))]
-                                      (swap! state update :project daw/add-third-party-plugin plugin-id package)
-                                      (swap! state assoc :plugin-package-status
-                                             (str "Verified AudioWorklet package " (:package/id package))))))))))))
+                                    (-> (verify-plugin-publisher! package)
+                                        (.then (fn [signature-valid?]
+                                                 (cond
+                                                   (not signature-valid?)
+                                                   (swap! state assoc :plugin-package-status "Plugin rejected: invalid publisher signature")
+                                                   (daw/trusted-plugin-package? (:project @state) package)
+                                                   (install-plugin-package! package)
+                                                   :else
+                                                   (do (reset! pending-plugin-package package)
+                                                       (swap! state assoc :plugin-package-status
+                                                              (str "Signed package awaits trust: "
+                                                                   (:package/publisher-name package))))))))))))))))
         (.catch #(swap! state assoc :plugin-package-status (str "Plugin package error: " (.-message %)))))))
 (def recovery-key "kami-app-daw/recovery/v1")
 (defn send-midi-feedback! [plugin-id value]
@@ -740,6 +790,15 @@
              :on-change #(import-plugin-package! (aget (.. % -target -files) 0))}]]
    (when-let [status (:plugin-package-status @state)]
      [:small {:aria-label "Plugin package status"} status])
+   (when-let [package @pending-plugin-package]
+     [:button {:aria-label "Trust signed plugin publisher"
+               :on-click trust-pending-plugin-publisher!}
+      (str "Trust " (:package/publisher-name package))])
+   (for [[publisher-id publisher] (get-in project [:project/trusted-publishers])]
+     ^{:key publisher-id}
+     [:button {:aria-label (str "Revoke publisher " publisher-id)
+               :on-click #(swap! state update :project daw/revoke-plugin-publisher publisher-id)}
+      (str "Revoke " (:publisher/name publisher))])
    (for [[plugin-index plugin] (map-indexed vector (:project/plugins project))]
      ^{:key (:plugin/id plugin)}
      [:span.effect-automation

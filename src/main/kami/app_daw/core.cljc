@@ -22,7 +22,7 @@
                            :project/buses [{:bus/id "master" :bus/name "Master" :bus/gain 1.0}]
                            :project/master-effects {:filter/cutoff-hz 4200.0 :delay/time-sec 0.12 :delay/feedback 0.28
                                                     :effect/automation {}}
-                           :project/plugins []
+                           :project/plugins [] :project/trusted-publishers {}
                            :project/midi-mappings []
                            :project/assets {} :project/tracks []} m))
 (defn register-asset
@@ -169,6 +169,25 @@
                                 :parameter/default 0.0 :parameter/step 0.5}}}})
 (def third-party-source-limit 65536)
 (def plugin-capabilities #{:audio-processing})
+(defn trust-plugin-publisher [p publisher-id fingerprint display-name]
+  (if (and (string? publisher-id) (re-matches #"[a-z0-9][a-z0-9._-]{0,63}" publisher-id)
+           (string? fingerprint) (re-matches #"[0-9a-f]{64}" fingerprint)
+           (string? display-name) (not (str/blank? display-name)))
+    (assoc-in p [:project/trusted-publishers publisher-id]
+              {:publisher/fingerprint fingerprint :publisher/name display-name})
+    p))
+(defn revoke-plugin-publisher [p publisher-id]
+  (-> p
+      (update :project/trusted-publishers dissoc publisher-id)
+      (update :project/plugins
+              #(mapv (fn [plugin]
+                       (if (= publisher-id (:plugin/publisher-id plugin))
+                         (assoc plugin :plugin/enabled? false :plugin/trust :revoked)
+                         plugin)) %))))
+(defn trusted-plugin-package? [p package]
+  (= (:package/publisher-fingerprint package)
+     (get-in p [:project/trusted-publishers (:package/publisher-id package)
+                :publisher/fingerprint])))
 (defn plugin-descriptor [plugin]
   (or (:plugin/descriptor plugin) (get plugin-types (:plugin/kind plugin))))
 (defn valid-plugin-parameter-descriptor? [descriptor]
@@ -191,7 +210,15 @@
                     (not (every? valid-plugin-parameter-descriptor? (vals parameters)))
                     (not (boolean (re-matches #"[0-9a-f]{64}" (or (:package/source-sha256 package) ""))))
                     (not (set? (:package/capabilities package)))
-                    (not (every? plugin-capabilities (:package/capabilities package))))
+                    (not (every? plugin-capabilities (:package/capabilities package)))
+                    (not (string? (:package/publisher-id package)))
+                    (not (re-matches #"[a-z0-9][a-z0-9._-]{0,63}" (or (:package/publisher-id package) "")))
+                    (not (string? (:package/publisher-name package)))
+                    (str/blank? (:package/publisher-name package))
+                    (not (map? (:package/publisher-key package)))
+                    (not (re-matches #"[0-9a-f]{64}" (or (:package/publisher-fingerprint package) "")))
+                    (not (string? (:package/signature package)))
+                    (empty? (:package/signature package)))
             [[:invalid-plugin-manifest]])
           (when (or (not (string? (:package/source package)))
                     (empty? (:package/source package))
@@ -204,6 +231,11 @@
     :package/source (:plugin/source plugin)
     :package/source-sha256 (:plugin/source-sha256 plugin)
     :package/capabilities (:plugin/capabilities plugin)
+    :package/publisher-id (:plugin/publisher-id plugin)
+    :package/publisher-name (:plugin/publisher-name plugin)
+    :package/publisher-key (:plugin/publisher-key plugin)
+    :package/publisher-fingerprint (:plugin/publisher-fingerprint plugin)
+    :package/signature (:plugin/signature plugin)
     :package/descriptor (:plugin/descriptor plugin)}))
 (defn plugin-parameter-defaults [plugin-kind]
   (into {} (map (fn [[parameter descriptor]] [parameter (:parameter/default descriptor)]))
@@ -231,6 +263,11 @@
                :plugin/source (:package/source package) :plugin/enabled? true :plugin/mix 1.0
                :plugin/source-sha256 (:package/source-sha256 package)
                :plugin/capabilities (:package/capabilities package)
+               :plugin/publisher-id (:package/publisher-id package)
+               :plugin/publisher-name (:package/publisher-name package)
+               :plugin/publisher-key (:package/publisher-key package)
+               :plugin/publisher-fingerprint (:package/publisher-fingerprint package)
+               :plugin/signature (:package/signature package)
                :plugin/mix-automation [] :plugin/mix-interpolation :linear :plugin/automation-mode :read
                :plugin/parameters (into {} (map (fn [[parameter parameter-descriptor]]
                                                   [parameter (:parameter/default parameter-descriptor)]))

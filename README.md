@@ -1,5 +1,7 @@
 # KAMI DAW
 
+Signed third-party packages use ECDSA P-256 over the verified source digest. The browser recomputes the publisher-key SHA-256 fingerprint, verifies the signature with WebCrypto, holds unknown publishers pending explicit trust, and persists the trust decision. Revocation removes the publisher and immediately disables every associated plugin.
+
 Third-party AudioWorklet packages now declare an `audio-processing` capability and a SHA-256 digest for their exact processor source. Import recomputes the digest before registration, rejects undeclared capabilities or modified source, and persists the verified digest and capability set with project authority.
 
 EDN-native browser digital audio workstation for `kotoba-lang`. It owns music arrangement UI: tempo, musical ticks, tracks, clips, gain, mute/solo, transport, effects, and master export. It does not own video editing or 3D character authoring.
