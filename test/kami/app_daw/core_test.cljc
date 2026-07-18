@@ -56,10 +56,24 @@
   (let [registered (daw/register-asset p "audio:t" "take.wav" "abc123")]
     (is (= "audio:t" (daw/asset-id-by-name registered "take.wav")))
     (is (= "audio:t" (daw/asset-id-by-signature registered {:name "renamed.wav" :sha256 "abc123"})))
+    (is (nil? (daw/asset-id-by-signature registered {:name "take.wav" :sha256 "different"})))
     (is (= {:asset/name "take.wav" :asset/sha256 "abc123"} (get-in registered [:project/assets "audio:t"])))
     (is (= ["audio:t"] (daw/missing-asset-ids registered [])))
     (is (empty? (daw/missing-asset-ids registered ["audio:t"])))
     (is (= registered (daw/recover-project (daw/recovery-envelope registered))))))
+(deftest deterministic-directory-relink-search
+  (let [project (-> p (daw/register-asset "hashed" "original.wav" "aaa")
+                    (daw/register-asset "legacy" "legacy.wav"))
+        candidates [{:file/index 0 :file/path "root/z/renamed.wav" :file/name "renamed.wav" :file/sha256 "aaa"}
+                    {:file/index 1 :file/path "root/a/renamed.wav" :file/name "renamed.wav" :file/sha256 "aaa"}
+                    {:file/index 2 :file/path "root/legacy.wav" :file/name "legacy.wav" :file/sha256 "new"}
+                    {:file/index 3 :file/path "root/original.wav" :file/name "original.wav" :file/sha256 "wrong"}
+                    {:file/index 4 :file/path "root/unused.wav" :file/name "unused.wav" :file/sha256 "unused"}]
+        plan (daw/directory-relink-plan project candidates)]
+    (is (= [["hashed" 1] ["legacy" 2]]
+           (mapv (fn [match] [(:asset/id match) (get-in match [:candidate :file/index])]) (:relink/matches plan))))
+    (is (empty? (:relink/missing plan)))
+    (is (= ["root/original.wav" "root/unused.wav" "root/z/renamed.wav"] (:relink/ignored-paths plan)))))
 (deftest bounded-project-undo-redo
   (let [p2 (assoc p :project/name "two") history (daw/record-history daw/empty-history p)
         undone (daw/undo-project p2 history) redone (daw/redo-project (:project undone) (:history undone))]
