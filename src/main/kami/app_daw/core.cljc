@@ -1,4 +1,4 @@
-(ns kami.app-daw.core)
+(ns kami.app-daw.core (:require [clojure.string :as str]))
 
 (def schema "kami.ongaku-project/v1")
 (def history-limit 50)
@@ -269,6 +269,23 @@
 (defn mackie-motor-feedback? [touched-strips message]
   (not (and (= :fader (:mackie/action message))
             (contains? (or touched-strips #{}) (:mackie/strip message)))))
+(def mackie-hardware-profiles
+  {:generic-mcu {:profile/name "Generic MCU" :profile/bank-size 8 :profile/label-width 7
+                 :profile/lcd? true :profile/time-display? true :profile/fader-touch? true :profile/sysex-device 0x14}
+   :mackie-control {:profile/name "Mackie Control" :profile/bank-size 8 :profile/label-width 7
+                    :profile/lcd? true :profile/time-display? true :profile/fader-touch? true :profile/sysex-device 0x14}
+   :behringer-x-touch {:profile/name "Behringer X-Touch" :profile/bank-size 8 :profile/label-width 7
+                       :profile/lcd? true :profile/time-display? true :profile/fader-touch? true :profile/sysex-device 0x14}
+   :icon-platform-m-plus {:profile/name "iCON Platform M+" :profile/bank-size 8 :profile/label-width 7
+                          :profile/lcd? true :profile/time-display? true :profile/fader-touch? true :profile/sysex-device 0x14}})
+(defn mackie-hardware-profile [profile-id]
+  (get mackie-hardware-profiles profile-id (:generic-mcu mackie-hardware-profiles)))
+(defn detect-mackie-hardware-profile [port-names]
+  (let [names (str/upper-case (str/join " " (remove nil? port-names)))]
+    (cond (str/includes? names "X-TOUCH") :behringer-x-touch
+          (or (str/includes? names "PLATFORM M+") (str/includes? names "PLATFORM M PLUS")) :icon-platform-m-plus
+          (str/includes? names "MACKIE CONTROL") :mackie-control
+          :else :generic-mcu)))
 (defn- character-code [character]
   #?(:clj (int character) :cljs (.charCodeAt (str character) 0)))
 (defn- mackie-ascii [value width]
@@ -276,11 +293,15 @@
                    (map #(let [code (character-code %)] (if (<= 0x20 code 0x7E) code 0x3F)))
                    (take width) vec)]
     (into ascii (repeat (- width (count ascii)) 0x20))))
-(defn mackie-scribble-message [tracks bank]
-  (let [window (take 8 (drop (max 0 (or bank 0)) tracks))
-        text (mapcat #(mackie-ascii (or (:track/name %) "") 7) window)
-        padded (into (vec text) (repeat (- 56 (count text)) (int \space)))]
-    (vec (concat [0xF0 0x00 0x00 0x66 0x14 0x12 0x00] padded [0xF7]))))
+(defn mackie-scribble-message
+  ([tracks bank] (mackie-scribble-message tracks bank :generic-mcu))
+  ([tracks bank profile-id]
+   (let [{:profile/keys [bank-size label-width sysex-device]} (mackie-hardware-profile profile-id)
+         window (take bank-size (drop (max 0 (or bank 0)) tracks))
+         text (mapcat #(mackie-ascii (or (:track/name %) "") label-width) window)
+         size (* bank-size label-width)
+         padded (into (vec text) (repeat (- size (count text)) 0x20))]
+     (vec (concat [0xF0 0x00 0x00 0x66 sysex-device 0x12 0x00] padded [0xF7])))))
 (defn mackie-time-display-messages [p tick]
   (let [ppq (max 1 (:project/ppq p)) tick (max 0 (long (or tick 0)))
         bar (inc (quot tick (* ppq 4)))

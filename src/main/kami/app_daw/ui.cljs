@@ -8,7 +8,7 @@
                    :track/clips [{:clip/id "chords" :clip/name "Chords" :clip/start-tick 960 :clip/length-ticks 2880}]}
                   {:track/id "voice" :track/name "Voice" :track/color "#c4b5fd" :track/gain 0.9
                    :track/clips [{:clip/id "hook" :clip/name "Hook" :clip/start-tick 2400 :clip/length-ticks 1440}]}]}))
-(defonce state (r/atom {:project sample :history daw/empty-history :history-replaying? false :clip-drag nil :clip-preview nil :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :analyzing? false :loudness-report nil :normalize-export? true :target-lufs -14 :true-peak-ceiling-db -1 :stem-exporting nil :stem-bundle-exporting? false :directory-searching? false :directory-result nil :recording nil :recording-loop nil :recording-cancelled? false :input-monitoring? false :input-monitor-active? false :input-monitor-gain 0.35 :input-monitor-db -96 :recording-error nil :project-error nil :recovered? false :punch-length-ticks 960 :loop-takes 3 :mackie-bank 0 :mackie-touched-strips #{} :buffers {} :assets {}}))
+(defonce state (r/atom {:project sample :history daw/empty-history :history-replaying? false :clip-drag nil :clip-preview nil :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :analyzing? false :loudness-report nil :normalize-export? true :target-lufs -14 :true-peak-ceiling-db -1 :stem-exporting nil :stem-bundle-exporting? false :directory-searching? false :directory-result nil :recording nil :recording-loop nil :recording-cancelled? false :input-monitoring? false :input-monitor-active? false :input-monitor-gain 0.35 :input-monitor-db -96 :recording-error nil :project-error nil :recovered? false :punch-length-ticks 960 :loop-takes 3 :mackie-bank 0 :mackie-profile :auto :mackie-active-profile :generic-mcu :mackie-touched-strips #{} :buffers {} :assets {}}))
 (defonce meter-timer (atom nil))
 (defonce transport-timer (atom nil))
 (defonce transport-origin (atom nil))
@@ -40,14 +40,17 @@
     (doseq [output (array-seq (js/Array.from (.values (or (.-outputs access) (js/Map.)))))]
       (.send output (clj->js message)))))
 (defn send-mackie-display! []
-  (let [snapshot @state project (:project snapshot)]
-    (when (:midi-sysex? snapshot)
-      (send-midi-bytes! (daw/mackie-scribble-message (:project/tracks project) (:mackie-bank snapshot))))
-    (doseq [message (daw/mackie-time-display-messages project (:tick snapshot))]
-      (send-midi-bytes! message))))
+  (let [snapshot @state project (:project snapshot) profile-id (:mackie-active-profile snapshot)
+        profile (daw/mackie-hardware-profile profile-id)]
+    (when (and (:midi-sysex? snapshot) (:profile/lcd? profile))
+      (send-midi-bytes! (daw/mackie-scribble-message (:project/tracks project) (:mackie-bank snapshot) profile-id)))
+    (when (:profile/time-display? profile)
+      (doseq [message (daw/mackie-time-display-messages project (:tick snapshot))]
+        (send-midi-bytes! message)))))
 (defn send-mackie-time! [tick]
   (let [slot (long (quot (max 0 tick) (max 1 (quot (get-in @state [:project :project/ppq]) 10))))]
-    (when (not= slot @mackie-time-slot)
+    (when (and (:profile/time-display? (daw/mackie-hardware-profile (:mackie-active-profile @state)))
+               (not= slot @mackie-time-slot))
       (reset! mackie-time-slot slot)
       (doseq [message (daw/mackie-time-display-messages (:project @state) tick)]
         (send-midi-bytes! message)))))
@@ -72,12 +75,13 @@
           :fader-touch
           (let [strip (:mackie/strip mackie) touched? (:mackie/touched? mackie)
                 track (get-in @state [:project :project/tracks strip])]
-            (swap! state update :mackie-touched-strips (if touched? (fnil conj #{}) disj) strip)
-            (swap! state assoc :midi-last-message
-                   (str "Mackie strip " (inc strip) (if touched? " touch" " release")))
-            (when (and track (not touched?))
-              (send-mackie-feedback! (assoc mackie :mackie/action :fader
-                                            :mackie/value (or (:track/gain track) 1.0)) true)))
+            (when (:profile/fader-touch? (daw/mackie-hardware-profile (:mackie-active-profile @state)))
+              (swap! state update :mackie-touched-strips (if touched? (fnil conj #{}) disj) strip)
+              (swap! state assoc :midi-last-message
+                     (str "Mackie strip " (inc strip) (if touched? " touch" " release")))
+              (when (and track (not touched?))
+                (send-mackie-feedback! (assoc mackie :mackie/action :fader
+                                              :mackie/value (or (:track/gain track) 1.0)) true))))
 
           (let [project (daw/apply-mackie-channel (:project @state) mackie)
                 track (get (:project/tracks project) (:mackie/strip mackie))]
@@ -114,13 +118,17 @@
 (defn connect-midi! []
   (if-let [request (.-requestMIDIAccess js/navigator)]
     (let [connected! (fn [access]
+                       (let [port-names (concat (map #(.-name %) (array-seq (js/Array.from (.values (.-inputs access)))))
+                                                (map #(.-name %) (array-seq (js/Array.from (.values (or (.-outputs access) (js/Map.)))))))
+                             selected (:mackie-profile @state)
+                             active (if (= :auto selected) (daw/detect-mackie-hardware-profile port-names) selected)]
                        (reset! midi-access-runtime access)
                        (bind-midi-inputs! access)
                        (set! (.-onstatechange access) #(bind-midi-inputs! access))
-                       (swap! state assoc :midi-status :connected :midi-sysex? (true? (.-sysexEnabled access))
+                       (swap! state assoc :midi-status :connected :midi-sysex? (true? (.-sysexEnabled access)) :mackie-active-profile active
                               :project-error nil)
                        (reset! mackie-time-slot nil)
-                       (send-mackie-display!))]
+                       (send-mackie-display!))) ]
       (-> (.call request js/navigator #js {:sysex true})
         (.catch #(.call request js/navigator #js {:sysex false}))
         (.then connected!)
@@ -648,6 +656,19 @@
   [:section.meta [:label "Project" [:input {:value (:project/name project) :on-change #(swap! state assoc-in [:project :project/name] (.. % -target -value))}]]
    [:label "Tempo" [:input {:type "number" :value (:project/bpm project) :on-change #(swap! state assoc-in [:project :project/bpm] (js/parseInt (.. % -target -value)))}]]
    [:button {:on-click connect-midi! :aria-label "Connect MIDI controller"} "Connect MIDI"]
+   [:label "Surface profile"
+    [:select {:value (name (:mackie-profile @state)) :aria-label "Mackie hardware profile"
+              :on-change #(let [selected (keyword (.. % -target -value))]
+                            (swap! state assoc :mackie-profile selected
+                                   :mackie-active-profile (if (= :auto selected) :generic-mcu selected)
+                                   :mackie-touched-strips #{})
+                            (reset! mackie-time-slot nil)
+                            (send-mackie-display!))}
+     [:option {:value "auto"} "Auto detect"]
+     (for [[profile-id profile] (sort-by (comp :profile/name val) daw/mackie-hardware-profiles)]
+       ^{:key profile-id} [:option {:value (name profile-id)} (:profile/name profile)])]]
+   [:span {:aria-label "Active Mackie hardware profile"}
+    (:profile/name (daw/mackie-hardware-profile (:mackie-active-profile @state)))]
    [:output {:aria-label "MIDI connection status"}
     (case (:midi-status @state) :connected (str "Connected inputs: " (:midi-input-count @state 0)
                                                " • outputs: " (:midi-output-count @state 0))
