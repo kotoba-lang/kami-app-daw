@@ -20,6 +20,12 @@
     (is (empty? (daw/validate-project routed)))
     (is (= [[:missing-bus "t" "missing"]]
            (daw/validate-project (daw/route-track p "t" "missing" 0.1))))))
+(deftest gated-loudness-and-true-peak-safe-normalization
+  (is (< (abs (- -0.691 (daw/power->lufs 1.0))) 0.001))
+  (is (< (abs (- -20.691 (daw/integrated-lufs [0.01 0.01 0.0]))) 0.001))
+  (is (= -2.0 (daw/normalization-gain-db -20.0 -0.5 -14.0 -2.5)))
+  (is (= 6.0 (daw/normalization-gain-db -20.0 -10.0 -14.0 -1.0)))
+  (is (zero? (daw/normalization-gain-db -96.0 -96.0 -14.0 -1.0))))
 (deftest recorded-take-becomes-authoritative-clip
   (let [recorded (daw/add-recorded-clip p "t" "recording:1" 480 1.25 "take-1")
         clip (last (get-in recorded [:project/tracks 0 :track/clips]))]

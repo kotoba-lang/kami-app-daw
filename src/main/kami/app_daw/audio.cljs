@@ -134,7 +134,7 @@
 (defn- write-string! [view offset value]
   (doseq [i (range (count value))] (.setUint8 view (+ offset i) (.charCodeAt value i))))
 
-(defn- wav-blob [buffer]
+(defn- wav-blob [buffer gain]
   (let [samples (.getChannelData buffer 0) size (+ 44 (* 2 (.-length samples)))
         ab (js/ArrayBuffer. size) view (js/DataView. ab) rate (.-sampleRate buffer)]
     (write-string! view 0 "RIFF") (.setUint32 view 4 (- size 8) true)
@@ -143,21 +143,75 @@
     (.setUint32 view 28 (* rate 2) true) (.setUint16 view 32 2 true) (.setUint16 view 34 16 true)
     (write-string! view 36 "data") (.setUint32 view 40 (* 2 (.-length samples)) true)
     (doseq [i (range (.-length samples))]
-      (let [x (max -1 (min 1 (aget samples i)))]
+      (let [x (max -1 (min 1 (* gain (aget samples i))))]
         (.setInt16 view (+ 44 (* i 2)) (* x (if (neg? x) 32768 32767)) true)))
     (js/Blob. #js [ab] #js {:type "audio/wav"})))
 
-(defn export-wav! [project buffers {:keys [cutoff delay]} on-done]
+(defn- render-project! [project buffers {:keys [cutoff delay]}]
   (let [seconds (+ 1 (daw/tick->seconds project (daw/duration-ticks project)))
         ctx (js/OfflineAudioContext. 1 (js/Math.ceil (* 44100 seconds)) 44100)
         chain (connect-chain! ctx (.-destination ctx) cutoff delay)]
     (schedule! ctx (:input chain) project buffers)
-    (-> (.startRendering ctx)
-        (.then (fn [buffer]
-                 (let [url (js/URL.createObjectURL (wav-blob buffer)) a (.createElement js/document "a")]
-                   (set! (.-href a) url) (set! (.-download a) "kami-daw-master.wav") (.click a)
-                   (js/setTimeout #(js/URL.revokeObjectURL url) 1000)
-                   (on-done)))))))
+    (.startRendering ctx)))
+
+(defn- k-weight! [buffer]
+  (let [ctx (js/OfflineAudioContext. 1 (.-length buffer) (.-sampleRate buffer))
+        source (.createBufferSource ctx) high-pass (.createBiquadFilter ctx) shelf (.createBiquadFilter ctx)]
+    (set! (.-buffer source) buffer)
+    (set! (.-type high-pass) "highpass") (set! (.. high-pass -frequency -value) 38) (set! (.. high-pass -Q -value) 0.5)
+    (set! (.-type shelf) "highshelf") (set! (.. shelf -frequency -value) 1682) (set! (.. shelf -gain -value) 4)
+    (.connect source high-pass) (.connect high-pass shelf) (.connect shelf (.-destination ctx))
+    (.start source 0)
+    (.startRendering ctx)))
+
+(defn- oversample-4x! [buffer]
+  (let [rate (* 4 (.-sampleRate buffer)) ctx (js/OfflineAudioContext. 1 (* 4 (.-length buffer)) rate)
+        source (.createBufferSource ctx)]
+    (set! (.-buffer source) buffer) (.connect source (.-destination ctx)) (.start source 0)
+    (.startRendering ctx)))
+
+(defn- block-powers [buffer]
+  (let [samples (.getChannelData buffer 0) rate (.-sampleRate buffer)
+        window (max 1 (js/Math.round (* 0.4 rate))) step (max 1 (js/Math.round (* 0.1 rate)))
+        limit (.-length samples)]
+    (loop [start 0 powers []]
+      (if (>= start limit) powers
+          (let [end (min limit (+ start window))
+                sum (loop [i start acc 0] (if (< i end) (let [x (aget samples i)] (recur (inc i) (+ acc (* x x)))) acc))]
+            (recur (+ start step) (conj powers (/ sum (max 1 (- end start))))))))))
+
+(defn- peak-db [buffer]
+  (let [samples (.getChannelData buffer 0)
+        peak (loop [i 0 value 0] (if (< i (.-length samples)) (recur (inc i) (max value (js/Math.abs (aget samples i)))) value))]
+    (if (pos? peak) (* 20 (js/Math.log10 peak)) -96.0)))
+
+(defn analyze-buffer! [buffer]
+  (-> (.all js/Promise #js [(k-weight! buffer) (oversample-4x! buffer)])
+      (.then (fn [values]
+               {:loudness/lufs (daw/integrated-lufs (block-powers (aget values 0)))
+                :true-peak/dbtp (peak-db (aget values 1))}))))
+
+(defn analyze-project! [project buffers effects on-done]
+  (-> (render-project! project buffers effects)
+      (.then analyze-buffer!)
+      (.then on-done)))
+
+(defn export-wav! [project buffers effects on-done]
+  (-> (render-project! project buffers effects)
+      (.then (fn [buffer]
+               (-> (analyze-buffer! buffer)
+                   (.then (fn [report]
+                            (let [gain-db (if (:normalize-export? effects)
+                                            (daw/normalization-gain-db (:loudness/lufs report) (:true-peak/dbtp report)
+                                                                       (:target-lufs effects) (:true-peak-ceiling-db effects)) 0)
+                                  gain (js/Math.pow 10 (/ gain-db 20))
+                                  result (assoc report :normalization/gain-db gain-db
+                                                       :delivery/lufs (+ (:loudness/lufs report) gain-db)
+                                                       :delivery/true-peak-dbtp (+ (:true-peak/dbtp report) gain-db))
+                                  url (js/URL.createObjectURL (wav-blob buffer gain)) a (.createElement js/document "a")]
+                              (set! (.-href a) url) (set! (.-download a) "kami-daw-master.wav") (.click a)
+                              (js/setTimeout #(js/URL.revokeObjectURL url) 1000)
+                              (on-done result)))))))))
 
 (defn export-track-wav! [project track-id buffers effects on-done]
   (let [stem (daw/solo-track-project project track-id)]
@@ -167,6 +221,6 @@
       (schedule! ctx (:input chain) stem buffers)
       (-> (.startRendering ctx)
           (.then (fn [buffer]
-                   (let [url (js/URL.createObjectURL (wav-blob buffer)) a (.createElement js/document "a")]
+                   (let [url (js/URL.createObjectURL (wav-blob buffer 1)) a (.createElement js/document "a")]
                      (set! (.-href a) url) (set! (.-download a) (str "kami-daw-stem-" track-id ".wav")) (.click a)
                      (js/setTimeout #(js/URL.revokeObjectURL url) 1000) (on-done))))))))

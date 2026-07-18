@@ -8,7 +8,7 @@
                    :track/clips [{:clip/id "chords" :clip/name "Chords" :clip/start-tick 960 :clip/length-ticks 2880}]}
                   {:track/id "voice" :track/name "Voice" :track/color "#c4b5fd" :track/gain 0.9
                    :track/clips [{:clip/id "hook" :clip/name "Hook" :clip/start-tick 2400 :clip/length-ticks 1440}]}]}))
-(defonce state (r/atom {:project sample :history daw/empty-history :history-replaying? false :clip-drag nil :clip-preview nil :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :stem-exporting nil :directory-searching? false :directory-result nil :recording nil :recording-loop nil :recording-cancelled? false :input-monitoring? false :input-monitor-active? false :input-monitor-gain 0.35 :input-monitor-db -96 :recording-error nil :project-error nil :recovered? false :punch-length-ticks 960 :loop-takes 3 :buffers {} :assets {}}))
+(defonce state (r/atom {:project sample :history daw/empty-history :history-replaying? false :clip-drag nil :clip-preview nil :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :analyzing? false :loudness-report nil :normalize-export? true :target-lufs -14 :true-peak-ceiling-db -1 :stem-exporting nil :directory-searching? false :directory-result nil :recording nil :recording-loop nil :recording-cancelled? false :input-monitoring? false :input-monitor-active? false :input-monitor-gain 0.35 :input-monitor-db -96 :recording-error nil :project-error nil :recovered? false :punch-length-ticks 960 :loop-takes 3 :buffers {} :assets {}}))
 (defonce meter-timer (atom nil))
 (defonce input-monitor-timer (atom nil))
 (defonce recorder-runtime (atom nil))
@@ -163,8 +163,15 @@
         (start-meter!) (swap! state assoc :playing? true))))
 (defn export! []
   (swap! state assoc :exporting? true)
-  (audio/export-wav! (:project @state) (:buffers @state) (select-keys @state [:cutoff :delay])
-                     #(swap! state assoc :exporting? false)))
+  (-> (audio/export-wav! (:project @state) (:buffers @state)
+                         (select-keys @state [:cutoff :delay :normalize-export? :target-lufs :true-peak-ceiling-db])
+                         #(swap! state assoc :exporting? false :loudness-report %))
+      (.catch #(swap! state assoc :exporting? false :project-error (str "Master export failed: " (.-message %))))))
+(defn analyze-master! []
+  (swap! state assoc :analyzing? true :project-error nil)
+  (-> (audio/analyze-project! (:project @state) (:buffers @state) (select-keys @state [:cutoff :delay])
+                              #(swap! state assoc :analyzing? false :loudness-report %))
+      (.catch #(swap! state assoc :analyzing? false :project-error (str "Master analysis failed: " (.-message %))))))
 (defn export-stem! [track-id]
   (swap! state assoc :stem-exporting track-id)
   (audio/export-track-wav! (:project @state) track-id (:buffers @state) (select-keys @state [:cutoff :delay])
@@ -440,6 +447,16 @@
                                     :on-change #(set-input-monitor-gain! (js/parseFloat (.. % -target -value)))}]]
    [:meter {:min -60 :max 0 :value (max -60 (:input-monitor-db @state))
             :title (str "Input " (.toFixed (:input-monitor-db @state) 1) " dBFS")}]
+   [:label "Normalize master" [:input {:type "checkbox" :checked (:normalize-export? @state)
+                                        :aria-label "Normalize master export"
+                                        :on-change #(swap! state assoc :normalize-export? (.. % -target -checked))}]]
+   [:label "Target LUFS" [:input {:type "number" :min -30 :max -5 :step 1 :value (:target-lufs @state)
+                                   :aria-label "Target integrated LUFS"
+                                   :on-change #(swap! state assoc :target-lufs (js/parseFloat (.. % -target -value)))}]]
+   [:label "True-peak ceiling" [:input {:type "number" :min -6 :max 0 :step 0.1 :value (:true-peak-ceiling-db @state)
+                                         :aria-label "True peak ceiling dBTP"
+                                         :on-change #(swap! state assoc :true-peak-ceiling-db (js/parseFloat (.. % -target -value)))}]]
+   [:button {:on-click analyze-master! :disabled (:analyzing? @state)} (if (:analyzing? @state) "Analyzing…" "Analyze loudness")]
    [:button {:on-click export! :disabled (:exporting? @state)} (if (:exporting? @state) "Rendering…" "Export WAV")]
    [:button {:on-click download-project!} "Save project EDN"]
    [:label "Open project EDN" [:input {:type "file" :accept ".edn,application/edn" :aria-label "Open DAW project EDN" :on-change load-project!}]]
@@ -452,6 +469,14 @@
    [:button {:on-click redo! :disabled (empty? (get-in @state [:history :history/future])) :aria-label "Redo project edit"} "↷ Redo"]
    [:button {:on-click #(js/navigator.clipboard.writeText (pr-str project))} "Copy EDN"]]
   (when-let [error (:project-error @state)] [:section.meta [:strong (str "Project error: " error)]])
+  (when-let [report (:loudness-report @state)]
+    [:section.meta.master-analysis
+     [:strong (str "Master: " (.toFixed (:loudness/lufs report) 1) " LUFS • "
+                   (.toFixed (:true-peak/dbtp report) 1) " dBTP")]
+     (when (contains? report :normalization/gain-db)
+       [:span (str "Delivery: " (.toFixed (:delivery/lufs report) 1) " LUFS • "
+                   (.toFixed (:delivery/true-peak-dbtp report) 1) " dBTP • gain "
+                   (.toFixed (:normalization/gain-db report) 1) " dB")])])
   (when (:directory-searching? @state) [:section.meta [:strong "Searching audio directory…"]])
   (when-let [{:keys [matched missing ignored]} (:directory-result @state)]
     [:section.meta [:strong (str "Directory relink: " matched " matched • " (count missing) " missing • " ignored " ignored")]])
