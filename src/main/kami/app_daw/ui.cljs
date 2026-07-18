@@ -7,28 +7,43 @@
                    :track/clips [{:clip/id "chords" :clip/name "Chords" :clip/start-tick 960 :clip/length-ticks 2880}]}
                   {:track/id "voice" :track/name "Voice" :track/color "#c4b5fd" :track/gain 0.9
                    :track/clips [{:clip/id "hook" :clip/name "Hook" :clip/start-tick 2400 :clip/length-ticks 1440}]}]}))
-(defonce state (r/atom {:project sample :playing? false :tick 1440 :cutoff 4200 :delay 0.12 :exporting? false}))
+(defonce state (r/atom {:project sample :playing? false :tick 1440 :cutoff 4200 :delay 0.12 :exporting? false :buffers {} :assets {}}))
+(defn import-track! [track event]
+  (when-let [file (aget (.. event -target -files) 0)]
+    (let [asset-id (str "audio:" (:track/id track))]
+      (audio/decode-file! file
+        (fn [buffer]
+          (swap! state (fn [s]
+                         (-> s (assoc-in [:buffers asset-id] buffer)
+                             (assoc-in [:assets asset-id] {:name (.-name file) :waveform (audio/waveform buffer 48)})
+                             (update :project daw/set-track (:track/id track) :track/clips
+                                     (mapv #(assoc % :clip/asset-id asset-id) (:track/clips track)))))))))))
 (defn toggle-play! []
   (if (:playing? @state)
     (do (audio/stop!) (swap! state assoc :playing? false))
-    (do (audio/play! (:project @state) (select-keys @state [:cutoff :delay]))
+    (do (audio/play! (:project @state) (:buffers @state) (select-keys @state [:cutoff :delay]))
         (swap! state assoc :playing? true))))
 (defn export! []
   (swap! state assoc :exporting? true)
-  (audio/export-wav! (:project @state) (select-keys @state [:cutoff :delay])
+  (audio/export-wav! (:project @state) (:buffers @state) (select-keys @state [:cutoff :delay])
                      #(swap! state assoc :exporting? false)))
 (defn track-row [track total]
+  (let [asset-id (get-in track [:track/clips 0 :clip/asset-id]) asset (get-in @state [:assets asset-id])]
   [:div.track-row [:div.track-head [:strong (:track/name track)]
     [:div.buttons [:button {:on-click #(swap! state update :project daw/set-track (:track/id track) :track/mute? (not (:track/mute? track)))} (if (:track/mute? track) "M ✓" "M")]
      [:button {:on-click #(swap! state update :project daw/set-track (:track/id track) :track/solo? (not (:track/solo? track)))} (if (:track/solo? track) "S ✓" "S")]]
+    [:input {:type "file" :accept "audio/*" :aria-label (str "Import " (:track/name track) " audio") :on-change #(import-track! track %)}]
+    (when asset [:small (:name asset)])
     [:input {:type "range" :min 0 :max 1 :step .01 :value (:track/gain track)
              :aria-label (str (:track/name track) " gain")
              :on-change #(swap! state update :project daw/set-track (:track/id track) :track/gain (js/parseFloat (.. % -target -value)))}]]
-   [:div.lane (for [clip (:track/clips track)] ^{:key (:clip/id clip)}
+   [:div.lane (when asset [:div.waveform {:style {:position "absolute" :inset "8px" :display "flex" :align-items "center" :gap "2px" :opacity .45}}
+                              (for [[i peak] (map-indexed vector (:waveform asset))] ^{:key i} [:i {:style {:display "block" :flex 1 :min-height "2px" :height (str (* 90 peak) "%") :background "#dffcff"}}])])
+    (for [clip (:track/clips track)] ^{:key (:clip/id clip)}
     [:button.clip {:style {:left (str (* 100 (/ (:clip/start-tick clip) total)) "%")
                            :width (str (* 100 (/ (:clip/length-ticks clip) total)) "%")
                            :background (:track/color track)}
-                   :on-click #(swap! state assoc :tick (:clip/start-tick clip))} (:clip/name clip)])]])
+                   :on-click #(swap! state assoc :tick (:clip/start-tick clip))} (:clip/name clip)])]]))
 (defn app [] (let [{:keys [project playing? tick]} @state total (max 3840 (daw/duration-ticks project))]
  [:main [:header [:div [:small "KOTOBA-LANG / MUSIC"] [:h1 "KAMI DAW"]]
    [:div.transport [:button.primary {:on-click toggle-play!} (if playing? "■ Stop" "▶ Play audio")]
