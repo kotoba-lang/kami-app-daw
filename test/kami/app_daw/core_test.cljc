@@ -19,11 +19,18 @@
     (is (= [1 daw/schema 44100 16 960]
            ((juxt :stem-bundle/version :stem-bundle/project-schema :stem-bundle/sample-rate
                   :stem-bundle/bit-depth :stem-bundle/timeline-end-tick) manifest)))
-    (is (= [{:stem/track-id "t" :stem/track-name nil :stem/channel-layout :mono
+    (is (= [{:stem/track-id "t" :stem/track-name nil :stem/channel-layout :stereo
              :stem/entry-name "stems/0.wav"}]
            (:stem-bundle/tracks manifest)))
     (is (= manifest (daw/accept-stem-bundle-manifest p manifest #{"stems/0.wav"})))
     (is (nil? (daw/accept-stem-bundle-manifest p manifest #{})))))
+(deftest project-authoritative-track-pan
+  (let [left (daw/set-track-pan p "t" -2) right (daw/set-track-pan p "t" 2)]
+    (is (= -1.0 (get-in left [:project/tracks 0 :track/pan])))
+    (is (= 1.0 (get-in right [:project/tracks 0 :track/pan])))
+    (is (empty? (daw/validate-project left)))
+    (is (= [[:invalid-track-pan "t"]]
+           (daw/validate-project (assoc-in p [:project/tracks 0 :track/pan] 1.1))))))
 (deftest project-authoritative-bus-automation
   (let [automated (daw/set-bus-gain-automation p "master" [{:tick 960 :gain 0.25} {:tick 0 :gain 1.0}])]
     (is (= [{:automation/tick 0 :automation/gain 1.0} {:automation/tick 960 :automation/gain 0.25}]

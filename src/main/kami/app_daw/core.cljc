@@ -83,6 +83,8 @@
 (defn set-track [p track-id k value]
   (update p :project/tracks #(mapv (fn [track] (if (= track-id (:track/id track))
                                                   (assoc track k value) track)) %)))
+(defn set-track-pan [p track-id pan]
+  (set-track p track-id :track/pan (max -1.0 (min 1.0 (or pan 0.0)))))
 (defn update-clip [p clip-id f]
   (update p :project/tracks
           #(mapv (fn [track] (update track :track/clips
@@ -144,7 +146,7 @@
    :stem-bundle/tracks
    (mapv (fn [index track]
            {:stem/track-id (:track/id track) :stem/track-name (:track/name track)
-            :stem/channel-layout :mono :stem/entry-name (stem-entry-name index)})
+            :stem/channel-layout :stereo :stem/entry-name (stem-entry-name index)})
          (range) (:project/tracks p))})
 (defn accept-stem-bundle-manifest [p manifest entry-names]
   (let [expected (stem-bundle-manifest p) tracks (:stem-bundle/tracks manifest)]
@@ -223,6 +225,9 @@
               :let [points (:track/send-automation track)]
               :when (and (seq points) (not (apply <= (map :automation/tick points))))]
           [:invalid-send-automation-order (:track/id track)])
+        (for [track (:project/tracks p)
+              :when (not (<= -1 (or (:track/pan track) 0) 1))]
+          [:invalid-track-pan (:track/id track)])
         (for [bus (:project/buses p)
               :let [points (:bus/gain-automation bus)]
               :when (and (seq points) (not (apply <= (map :automation/tick points))))]
