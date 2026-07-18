@@ -352,6 +352,16 @@
                                    {:tick endpoint :send send}
                                    {:tick (:automation/tick point) :send (:automation/send point)})) current)]
     (swap! state update :project daw/set-send-automation (:track/id track) points)))
+(defn set-effect-automation! [parameter endpoint value]
+  (let [project (:project @state) end-tick (daw/duration-ticks project)
+        base (get-in project [:project/master-effects parameter])
+        current (or (seq (get-in project [:project/master-effects :effect/automation parameter]))
+                    [{:automation/tick 0 :automation/value base}
+                     {:automation/tick end-tick :automation/value base}])
+        points (mapv (fn [point]
+                       {:tick (:automation/tick point)
+                        :value (if (= endpoint (:automation/tick point)) value (:automation/value point))}) current)]
+    (swap! state update :project daw/set-effect-automation parameter points)))
 (declare move-clip-drag! finish-clip-drag! cancel-clip-drag!)
 (defn remove-clip-drag-listeners! []
   (.removeEventListener js/window "pointermove" move-clip-drag!)
@@ -461,8 +471,27 @@
     [:meter {:min -60 :max 0 :value (max -60 (:meter-db @state)) :title (str (.toFixed (:meter-db @state) 1) " dBFS")}]]]
   [:section.meta [:label "Project" [:input {:value (:project/name project) :on-change #(swap! state assoc-in [:project :project/name] (.. % -target -value))}]]
    [:label "Tempo" [:input {:type "number" :value (:project/bpm project) :on-change #(swap! state assoc-in [:project :project/bpm] (js/parseInt (.. % -target -value)))}]]
-   [:label "Low-pass" [:input {:type "range" :min 300 :max 12000 :step 100 :value (:cutoff @state) :on-change #(swap! state assoc :cutoff (js/parseFloat (.. % -target -value)))}]]
-   [:label "Delay" [:input {:type "range" :min 0 :max 0.5 :step 0.01 :value (:delay @state) :on-change #(swap! state assoc :delay (js/parseFloat (.. % -target -value)))}]]
+   (for [[parameter label minimum maximum step]
+         [[:filter/cutoff-hz "Filter cutoff" 40 20000 10]
+          [:delay/time-sec "Delay time" 0 1 0.01]
+          [:delay/feedback "Delay feedback" 0 0.9 0.01]]
+         :let [base (get-in project [:project/master-effects parameter])
+               end-tick (daw/duration-ticks project)
+               points (get-in project [:project/master-effects :effect/automation parameter])
+               start-value (or (:automation/value (first points)) base)
+               end-value (or (:automation/value (last points)) base)]]
+     ^{:key parameter}
+     [:span.effect-automation
+      [:label label [:input {:type "number" :min minimum :max maximum :step step :value base
+                              :aria-label (str label " base")
+                              :on-change #(swap! state update :project daw/set-master-effect parameter
+                                                 (js/parseFloat (.. % -target -value)))}]]
+      [:label "A→" [:input {:type "number" :min minimum :max maximum :step step :value start-value
+                              :aria-label (str label " automation start")
+                              :on-change #(set-effect-automation! parameter 0 (js/parseFloat (.. % -target -value)))}]]
+      [:label "→B" [:input {:type "number" :min minimum :max maximum :step step :value end-value
+                              :aria-label (str label " automation end")
+                              :on-change #(set-effect-automation! parameter end-tick (js/parseFloat (.. % -target -value)))}]]])
    (for [bus (:project/buses project)
          :let [end-tick (daw/duration-ticks project) points (:bus/gain-automation bus)
                start-gain (or (:automation/gain (first points)) (:bus/gain bus) 1)
