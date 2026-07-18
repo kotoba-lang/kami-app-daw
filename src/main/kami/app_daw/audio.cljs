@@ -122,6 +122,10 @@
         (let [bus (or (get bus-nodes (:track/bus-id track)) default-bus)
               send-gain (.createGain ctx)]
           (set! (.. send-gain -gain -value) (or (:track/send track) 0))
+          (.setValueAtTime (.-gain send-gain) (or (:track/send track) 0) start)
+          (doseq [point (:track/send-automation track)]
+            (.linearRampToValueAtTime (.-gain send-gain) (:automation/send point)
+                                      (+ start (daw/tick->seconds project (:automation/tick point)))))
           (.connect source gain) (.connect gain track-gain) (.connect track-gain bus)
           (.connect track-gain send-gain) (.connect send-gain send-delay))
         (if buffer (.start source begin offset actual-duration) (.start source begin))

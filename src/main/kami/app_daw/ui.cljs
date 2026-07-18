@@ -343,6 +343,15 @@
                                    {:tick endpoint :gain gain}
                                    {:tick (:automation/tick point) :gain (:automation/gain point)})) current)]
     (swap! state update :project daw/set-bus-gain-automation (:bus/id bus) points)))
+(defn set-send-automation! [track endpoint send]
+  (let [end-tick (daw/duration-ticks (:project @state))
+        current (or (:track/send-automation track)
+                    [{:automation/tick 0 :automation/send (or (:track/send track) 0)}
+                     {:automation/tick end-tick :automation/send (or (:track/send track) 0)}])
+        points (mapv (fn [point] (if (= endpoint (:automation/tick point))
+                                   {:tick endpoint :send send}
+                                   {:tick (:automation/tick point) :send (:automation/send point)})) current)]
+    (swap! state update :project daw/set-send-automation (:track/id track) points)))
 (declare move-clip-drag! finish-clip-drag! cancel-clip-drag!)
 (defn remove-clip-drag-listeners! []
   (.removeEventListener js/window "pointermove" move-clip-drag!)
@@ -412,6 +421,16 @@
     [:label "Send" [:input {:type "range" :min 0 :max 1 :step 0.05 :value (or (:track/send track) 0)
                              :aria-label (str (:track/name track) " delay send")
                              :on-change #(swap! state update :project daw/route-track (:track/id track) "master" (js/parseFloat (.. % -target -value)))}]]
+    (let [end-tick (daw/duration-ticks (:project @state)) points (:track/send-automation track)
+          start-send (or (:automation/send (first points)) (:track/send track) 0)
+          end-send (or (:automation/send (last points)) (:track/send track) 0)]
+      [:div.buttons
+       [:label "Send A→" [:input {:type "number" :min 0 :max 1 :step 0.05 :value start-send
+                                    :aria-label (str (:track/name track) " send automation start")
+                                    :on-change #(set-send-automation! track 0 (js/parseFloat (.. % -target -value)))}]]
+       [:label "→B" [:input {:type "number" :min 0 :max 1 :step 0.05 :value end-send
+                               :aria-label (str (:track/name track) " send automation end")
+                               :on-change #(set-send-automation! track end-tick (js/parseFloat (.. % -target -value)))}]]])
     [:button {:on-click #(export-stem! (:track/id track)) :disabled (= (:track/id track) (:stem-exporting @state))}
      (if (= (:track/id track) (:stem-exporting @state)) "Rendering stem…" "Export stem")]
     [:input {:type "range" :min 0 :max 1 :step 0.01 :value (:track/gain track)

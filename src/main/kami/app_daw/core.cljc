@@ -95,6 +95,11 @@
              (->> points (mapv (fn [{:keys [tick gain]}]
                                  {:automation/tick (max 0 tick) :automation/gain (max 0 gain)}))
                   (sort-by :automation/tick) vec)))
+(defn set-send-automation [p track-id points]
+  (set-track p track-id :track/send-automation
+             (->> points (mapv (fn [{:keys [tick send]}]
+                                 {:automation/tick (max 0 tick) :automation/send (max 0 (min 1 send))}))
+                  (sort-by :automation/tick) vec)))
 (defn set-bus-gain-automation [p bus-id points]
   (update p :project/buses
           #(mapv (fn [bus]
@@ -170,6 +175,10 @@
               :when (and (seq points)
                          (not (apply <= (map :automation/tick points))))]
           [:invalid-automation-order (:track/id track)])
+        (for [track (:project/tracks p)
+              :let [points (:track/send-automation track)]
+              :when (and (seq points) (not (apply <= (map :automation/tick points))))]
+          [:invalid-send-automation-order (:track/id track)])
         (for [bus (:project/buses p)
               :let [points (:bus/gain-automation bus)]
               :when (and (seq points) (not (apply <= (map :automation/tick points))))]
