@@ -3,7 +3,11 @@
 (def schema "kami.ongaku-project/v1")
 (defn project [m] (merge {:project/schema schema :project/ppq 480 :project/bpm 120
                            :project/buses [{:bus/id "master" :bus/name "Master" :bus/gain 1.0}]
-                           :project/tracks []} m))
+                           :project/assets {} :project/tracks []} m))
+(defn register-asset [p asset-id name]
+  (assoc-in p [:project/assets asset-id] {:asset/name name}))
+(defn asset-id-by-name [p name]
+  (some (fn [[asset-id asset]] (when (= name (:asset/name asset)) asset-id)) (:project/assets p)))
 (defn clip-end [clip] (+ (:clip/start-tick clip) (:clip/length-ticks clip)))
 (defn duration-ticks [p] (reduce max 0 (map clip-end (mapcat :track/clips (:project/tracks p)))))
 (defn tick->seconds [p tick] (/ (* tick 60.0) (* (:project/bpm p) (:project/ppq p))))

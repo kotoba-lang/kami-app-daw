@@ -25,8 +25,16 @@
           (swap! state (fn [s]
                          (-> s (assoc-in [:buffers asset-id] buffer)
                              (assoc-in [:assets asset-id] {:name (.-name file) :waveform (audio/waveform buffer 48)})
+                             (update :project daw/register-asset asset-id (.-name file))
                              (update :project daw/set-track (:track/id track) :track/clips
                                      (mapv #(assoc % :clip/asset-id asset-id) (:track/clips track)))))))))))
+(defn relink-audio! [event]
+  (doseq [file (array-seq (.. event -target -files))]
+    (when-let [asset-id (daw/asset-id-by-name (:project @state) (.-name file))]
+      (audio/decode-file! file
+        (fn [buffer]
+          (swap! state (fn [s] (-> s (assoc-in [:buffers asset-id] buffer)
+                                    (assoc-in [:assets asset-id] {:name (.-name file) :waveform (audio/waveform buffer 48)})))))))))
 (defn finish-recording! [{:keys [track-id start-tick planned-sec chunks stream stop-timer]}]
   (when stop-timer (js/clearTimeout stop-timer))
   (doseq [media-track (array-seq (.getTracks stream))] (.stop media-track))
@@ -40,6 +48,7 @@
                          (-> s (assoc :recording nil :recording-error nil)
                              (assoc-in [:buffers asset-id] buffer)
                              (assoc-in [:assets asset-id] {:name "Recorded take" :waveform (audio/waveform buffer 48)})
+                             (update :project daw/register-asset asset-id "Recorded take")
                              (update :project daw/add-recorded-clip track-id asset-id start-tick duration clip-id)
                              (assoc :selected clip-id)))))))))
 (defn stop-recording! []
@@ -85,7 +94,8 @@
                      (let [first-clip (first (mapcat :track/clips (:project/tracks project)))]
                        (audio/stop!) (stop-meter!)
                        (swap! state assoc :project project :selected (:clip/id first-clip)
-                              :tick (or (:clip/start-tick first-clip) 0) :playing? false :project-error nil))
+                              :tick (or (:clip/start-tick first-clip) 0) :playing? false :project-error nil
+                              :buffers {} :assets {}))
                      (swap! state assoc :project-error "Unsupported or invalid DAW project"))
                    (catch :default error (swap! state assoc :project-error (.-message error)))))))))
 (defn restore-recovery! []
@@ -166,6 +176,7 @@
    [:button {:on-click export! :disabled (:exporting? @state)} (if (:exporting? @state) "Rendering…" "Export WAV")]
    [:button {:on-click download-project!} "Save project EDN"]
    [:label "Open project EDN" [:input {:type "file" :accept ".edn,application/edn" :aria-label "Open DAW project EDN" :on-change load-project!}]]
+   [:label "Relink audio" [:input {:type "file" :accept "audio/*" :multiple true :aria-label "Relink DAW audio files" :on-change relink-audio!}]]
    [:button {:on-click #(js/navigator.clipboard.writeText (pr-str project))} "Copy EDN"]]
   (when-let [error (:project-error @state)] [:section.meta [:strong (str "Project error: " error)]])
   (when (:recovered? @state) [:section.meta [:strong "Recovered autosaved project"]])
