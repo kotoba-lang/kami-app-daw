@@ -113,6 +113,7 @@
             clip (:track/clips track)]
       (let [buffer (get buffers (:clip/asset-id clip))
             source (if buffer (.createBufferSource ctx) (.createOscillator ctx)) gain (.createGain ctx) track-gain (.createGain ctx)
+            panner (.createStereoPanner ctx)
             begin (+ start (daw/tick->seconds project (:clip/start-tick clip)))
             duration (daw/tick->seconds project (:clip/length-ticks clip))
             offset (or (:clip/source-offset-sec clip) 0)
@@ -128,6 +129,7 @@
         (.setValueAtTime (.-gain gain) level (+ begin (max fade-in (- actual-duration fade-out))))
         (.linearRampToValueAtTime (.-gain gain) 0 (+ begin actual-duration))
         (set! (.. track-gain -gain -value) (or (:track/gain track) 1))
+        (set! (.. panner -pan -value) (or (:track/pan track) 0))
         (doseq [point (:track/gain-automation track)]
           (.linearRampToValueAtTime (.-gain track-gain) (:automation/gain point)
                                     (+ start (daw/tick->seconds project (:automation/tick point)))))
@@ -138,8 +140,8 @@
           (doseq [point (:track/send-automation track)]
             (.linearRampToValueAtTime (.-gain send-gain) (:automation/send point)
                                       (+ start (daw/tick->seconds project (:automation/tick point)))))
-          (.connect source gain) (.connect gain track-gain) (.connect track-gain bus)
-          (.connect track-gain send-gain) (.connect send-gain send-delay))
+          (.connect source gain) (.connect gain track-gain) (.connect track-gain panner) (.connect panner bus)
+          (.connect panner send-gain) (.connect send-gain send-delay))
         (if buffer (.start source begin offset actual-duration) (.start source begin))
         (.stop source (+ begin actual-duration))))
     start))
@@ -157,27 +159,30 @@
   (doseq [i (range (count value))] (.setUint8 view (+ offset i) (.charCodeAt value i))))
 
 (defn- wav-blob [buffer gain]
-  (let [samples (.getChannelData buffer 0) size (+ 44 (* 2 (.-length samples)))
+  (let [channels (.-numberOfChannels buffer) frames (.-length buffer)
+        channel-data (mapv #(.getChannelData buffer %) (range channels))
+        data-size (* 2 channels frames) size (+ 44 data-size)
         ab (js/ArrayBuffer. size) view (js/DataView. ab) rate (.-sampleRate buffer)]
     (write-string! view 0 "RIFF") (.setUint32 view 4 (- size 8) true)
     (write-string! view 8 "WAVEfmt ") (.setUint32 view 16 16 true)
-    (.setUint16 view 20 1 true) (.setUint16 view 22 1 true) (.setUint32 view 24 rate true)
-    (.setUint32 view 28 (* rate 2) true) (.setUint16 view 32 2 true) (.setUint16 view 34 16 true)
-    (write-string! view 36 "data") (.setUint32 view 40 (* 2 (.-length samples)) true)
-    (doseq [i (range (.-length samples))]
-      (let [x (max -1 (min 1 (* gain (aget samples i))))]
-        (.setInt16 view (+ 44 (* i 2)) (* x (if (neg? x) 32768 32767)) true)))
+    (.setUint16 view 20 1 true) (.setUint16 view 22 channels true) (.setUint32 view 24 rate true)
+    (.setUint32 view 28 (* rate channels 2) true) (.setUint16 view 32 (* channels 2) true) (.setUint16 view 34 16 true)
+    (write-string! view 36 "data") (.setUint32 view 40 data-size true)
+    (doseq [frame (range frames) channel (range channels)]
+      (let [x (max -1 (min 1 (* gain (aget (nth channel-data channel) frame))))
+            index (+ (* frame channels) channel)]
+        (.setInt16 view (+ 44 (* index 2)) (* x (if (neg? x) 32768 32767)) true)))
     (js/Blob. #js [ab] #js {:type "audio/wav"})))
 
 (defn- render-project! [project buffers {:keys [cutoff delay]}]
   (let [seconds (+ 1 (daw/tick->seconds project (daw/duration-ticks project)))
-        ctx (js/OfflineAudioContext. 1 (js/Math.ceil (* 44100 seconds)) 44100)
+        ctx (js/OfflineAudioContext. 2 (js/Math.ceil (* 44100 seconds)) 44100)
         chain (connect-chain! ctx (.-destination ctx) project {:cutoff cutoff :delay delay})]
     (schedule! ctx (:input chain) project buffers)
     (.startRendering ctx)))
 
 (defn- k-weight! [buffer]
-  (let [ctx (js/OfflineAudioContext. 1 (.-length buffer) (.-sampleRate buffer))
+  (let [ctx (js/OfflineAudioContext. (.-numberOfChannels buffer) (.-length buffer) (.-sampleRate buffer))
         source (.createBufferSource ctx) high-pass (.createBiquadFilter ctx) shelf (.createBiquadFilter ctx)]
     (set! (.-buffer source) buffer)
     (set! (.-type high-pass) "highpass") (set! (.. high-pass -frequency -value) 38) (set! (.. high-pass -Q -value) 0.5)
@@ -187,24 +192,32 @@
     (.startRendering ctx)))
 
 (defn- oversample-4x! [buffer]
-  (let [rate (* 4 (.-sampleRate buffer)) ctx (js/OfflineAudioContext. 1 (* 4 (.-length buffer)) rate)
+  (let [rate (* 4 (.-sampleRate buffer)) ctx (js/OfflineAudioContext. (.-numberOfChannels buffer) (* 4 (.-length buffer)) rate)
         source (.createBufferSource ctx)]
     (set! (.-buffer source) buffer) (.connect source (.-destination ctx)) (.start source 0)
     (.startRendering ctx)))
 
 (defn- block-powers [buffer]
-  (let [samples (.getChannelData buffer 0) rate (.-sampleRate buffer)
+  (let [channels (mapv #(.getChannelData buffer %) (range (.-numberOfChannels buffer))) rate (.-sampleRate buffer)
         window (max 1 (js/Math.round (* 0.4 rate))) step (max 1 (js/Math.round (* 0.1 rate)))
-        limit (.-length samples)]
+        limit (.-length buffer)]
     (loop [start 0 powers []]
       (if (>= start limit) powers
           (let [end (min limit (+ start window))
-                sum (loop [i start acc 0] (if (< i end) (let [x (aget samples i)] (recur (inc i) (+ acc (* x x)))) acc))]
+                sum (reduce + (map (fn [samples]
+                                     (loop [i start acc 0]
+                                       (if (< i end) (let [x (aget samples i)] (recur (inc i) (+ acc (* x x)))) acc)))
+                                   channels))]
             (recur (+ start step) (conj powers (/ sum (max 1 (- end start))))))))))
 
 (defn- peak-db [buffer]
-  (let [samples (.getChannelData buffer 0)
-        peak (loop [i 0 value 0] (if (< i (.-length samples)) (recur (inc i) (max value (js/Math.abs (aget samples i)))) value))]
+  (let [peak (reduce max 0
+                     (map (fn [channel]
+                            (let [samples (.getChannelData buffer channel)]
+                              (loop [i 0 value 0]
+                                (if (< i (.-length samples))
+                                  (recur (inc i) (max value (js/Math.abs (aget samples i)))) value))))
+                          (range (.-numberOfChannels buffer))))]
     (if (pos? peak) (* 20 (js/Math.log10 peak)) -96.0)))
 
 (defn analyze-buffer! [buffer]
@@ -238,7 +251,7 @@
 (defn render-track-wav! [project track-id buffers effects]
   (let [stem (daw/solo-track-project project track-id)]
     (let [seconds (+ 1 (daw/tick->seconds project (daw/duration-ticks project)))
-          ctx (js/OfflineAudioContext. 1 (js/Math.ceil (* 44100 seconds)) 44100)
+          ctx (js/OfflineAudioContext. 2 (js/Math.ceil (* 44100 seconds)) 44100)
           chain (connect-chain! ctx (.-destination ctx) stem effects)]
       (schedule! ctx (:input chain) stem buffers)
       (-> (.startRendering ctx) (.then #(wav-blob % 1))))))

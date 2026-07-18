@@ -464,7 +464,11 @@
      (if (= (:track/id track) (:stem-exporting @state)) "Rendering stem…" "Export stem")]
     [:input {:type "range" :min 0 :max 1 :step 0.01 :value (:track/gain track)
              :aria-label (str (:track/name track) " gain")
-             :on-change #(swap! state update :project daw/set-track (:track/id track) :track/gain (js/parseFloat (.. % -target -value)))}]]
+             :on-change #(swap! state update :project daw/set-track (:track/id track) :track/gain (js/parseFloat (.. % -target -value)))}]
+    [:input {:type "range" :min -1 :max 1 :step 0.01 :value (or (:track/pan track) 0)
+             :aria-label (str (:track/name track) " pan")
+             :on-change #(swap! state update :project daw/set-track-pan (:track/id track)
+                                (js/parseFloat (.. % -target -value)))}]]
    [:div.lane (when asset [:div.waveform {:style {:position "absolute" :inset "8px" :display "flex" :align-items "center" :gap "2px" :opacity 0.45}}
                               (for [[i peak] (map-indexed vector (:waveform asset))] ^{:key i} [:i {:style {:display "block" :flex 1 :min-height "2px" :height (str (* 90 peak) "%") :background "#dffcff"}}])])
     (for [clip (:track/clips track)] ^{:key (:clip/id clip)}
