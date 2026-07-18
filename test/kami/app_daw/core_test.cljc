@@ -4,6 +4,13 @@
   (is (= 240 (get-in (daw/move-clip p "c" 240) [:project/tracks 0 :track/clips 0 :clip/start-tick])))
   (is (zero? (get-in (daw/move-clip p "c" -240) [:project/tracks 0 :track/clips 0 :clip/start-tick])))
   (is (empty? (daw/validate-project p))))
+(deftest sample-accurate-clip-playback-window
+  (let [clip {:clip/start-tick 480 :clip/length-ticks 1920 :clip/source-offset-sec 0.25}]
+    (is (= {:playback/delay-sec 0.5 :playback/source-offset-sec 0.25 :playback/duration-sec 2.0}
+           (daw/clip-playback-window p clip 0)))
+    (is (= {:playback/delay-sec 0.0 :playback/source-offset-sec 1.25 :playback/duration-sec 1.0}
+           (daw/clip-playback-window p clip 1440)))
+    (is (nil? (daw/clip-playback-window p clip 2400)))))
 (deftest non-destructive-clip-edit
   (let [edited (daw/edit-clip p "c" {:source-offset-sec 0.25 :fade-in-sec 0.1 :fade-out-sec 0.2})
         clip (get-in edited [:project/tracks 0 :track/clips 0])]

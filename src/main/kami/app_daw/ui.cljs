@@ -246,7 +246,8 @@
 (defn start-playback! [reset-to-zero?]
   (when reset-to-zero? (swap! state assoc :tick 0))
   (when-not (:playing? @state)
-    (-> (audio/play! (:project @state) (:buffers @state) (select-keys @state [:cutoff :delay]))
+    (-> (audio/play! (:project @state) (:buffers @state)
+                     (assoc (select-keys @state [:cutoff :delay]) :locate-tick (:tick @state)))
         (.then #(do (start-meter!) (swap! state assoc :playing? true :project-error nil)
                     (start-transport!) (send-midi-transport-feedback! (if reset-to-zero? :start :continue))))
         (.catch #(swap! state assoc :playing? false :project-error (str "Playback failed: " (.-message %)))))))

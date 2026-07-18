@@ -56,6 +56,15 @@
 (defn clip-end [clip] (+ (:clip/start-tick clip) (:clip/length-ticks clip)))
 (defn duration-ticks [p] (reduce max 0 (map clip-end (mapcat :track/clips (:project/tracks p)))))
 (defn tick->seconds [p tick] (/ (* tick 60.0) (* (:project/bpm p) (:project/ppq p))))
+(defn clip-playback-window [p clip locate-tick]
+  (let [clip-start (:clip/start-tick clip)
+        clip-end (+ clip-start (:clip/length-ticks clip))
+        play-start (max clip-start locate-tick)]
+    (when (< play-start clip-end)
+      {:playback/delay-sec (tick->seconds p (- play-start locate-tick))
+       :playback/source-offset-sec (+ (or (:clip/source-offset-sec clip) 0)
+                                      (tick->seconds p (- play-start clip-start)))
+       :playback/duration-sec (tick->seconds p (- clip-end play-start))})))
 (defn seconds->ticks [p seconds]
   (long (#?(:clj Math/round :cljs js/Math.round)
          (/ (* seconds (:project/bpm p) (:project/ppq p)) 60.0))))
