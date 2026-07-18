@@ -535,6 +535,11 @@
             mix-end (or (:automation/value (last mix-points)) mix-value)
             end-tick (daw/duration-ticks project)]
        [:span.effect-automation
+        [:label "Mix curve" [:select {:value (name (or (:plugin/mix-interpolation plugin) :linear))
+                                       :aria-label (str (:plugin/id plugin) " wet mix interpolation")
+                                       :on-change #(swap! state update :project daw/set-plugin-mix-interpolation
+                                                          (:plugin/id plugin) (keyword (.. % -target -value)))}
+                             [:option {:value "linear"} "Linear"] [:option {:value "step"} "Step"]]]
         [:label "Wet mix" [:input {:type "number" :min 0 :max 1 :step 0.05
                                    :value (or (:plugin/mix plugin) 1)
                                    :aria-label (str (:plugin/id plugin) " wet mix")

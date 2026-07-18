@@ -63,11 +63,15 @@
         (if (pos? rms) (* 20 (/ (js/Math.log rms) (js/Math.log 10))) -96)))
     -96))
 
-(defn- schedule-effect-param! [param project start base points]
+(defn- schedule-param! [param project start base points interpolation]
   (.setValueAtTime param base start)
   (doseq [point points]
-    (.linearRampToValueAtTime param (:automation/value point)
-                              (+ start (daw/tick->seconds project (:automation/tick point))))))
+    (let [time (+ start (daw/tick->seconds project (:automation/tick point)))]
+      (if (= :step interpolation)
+        (.setValueAtTime param (:automation/value point) time)
+        (.linearRampToValueAtTime param (:automation/value point) time)))))
+(defn- schedule-effect-param! [param project start base points]
+  (schedule-param! param project start base points :linear))
 
 (defn- connect-chain! [ctx destination project effects]
   (let [authority (:project/master-effects project)
@@ -98,9 +102,11 @@
                             mix-points (:plugin/mix-automation plugin)
                             dry (.createGain ctx) wet (.createGain ctx) sum (.createGain ctx)
                             parameters (get-in daw/plugin-types [(:plugin/kind plugin) :plugin/parameters])]
-                        (schedule-effect-param! (.-gain wet) project start mix-value mix-points)
-                        (schedule-effect-param! (.-gain dry) project start (- 1 mix-value)
-                                                (mapv #(update % :automation/value (fn [value] (- 1 value))) mix-points))
+                        (let [interpolation (or (:plugin/mix-interpolation plugin) :linear)]
+                          (schedule-param! (.-gain wet) project start mix-value mix-points interpolation)
+                          (schedule-param! (.-gain dry) project start (- 1 mix-value)
+                                           (mapv #(update % :automation/value (fn [value] (- 1 value))) mix-points)
+                                           interpolation))
                         (doseq [[parameter descriptor] parameters
                                 :let [audio-param (.get (.-parameters node) (name parameter))]]
                           (when audio-param

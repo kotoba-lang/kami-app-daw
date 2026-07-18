@@ -99,6 +99,15 @@
     (is (= [[:invalid-plugin "sat"]]
            (daw/validate-project
             (assoc-in automated [:project/plugins 0 :plugin/mix-automation 0 :automation/value] -0.1))))))
+(deftest plugin-mix-interpolation-is-validated-project-authority
+  (let [plugin (daw/add-plugin p "sat" :kami/saturator)
+        stepped (daw/set-plugin-mix-interpolation plugin "sat" :step)]
+    (is (= :linear (get-in plugin [:project/plugins 0 :plugin/mix-interpolation])))
+    (is (= :step (get-in stepped [:project/plugins 0 :plugin/mix-interpolation])))
+    (is (= stepped (daw/set-plugin-mix-interpolation stepped "sat" :bezier)))
+    (is (empty? (daw/validate-project stepped)))
+    (is (= [[:invalid-plugin "sat"]]
+           (daw/validate-project (assoc-in stepped [:project/plugins 0 :plugin/mix-interpolation] :curve))))))
 (deftest project-authoritative-bus-automation
   (let [automated (daw/set-bus-gain-automation p "master" [{:tick 960 :gain 0.25} {:tick 0 :gain 1.0}])]
     (is (= [{:automation/tick 0 :automation/gain 1.0} {:automation/tick 960 :automation/gain 0.25}]
