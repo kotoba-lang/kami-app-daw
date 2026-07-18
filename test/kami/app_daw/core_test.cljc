@@ -32,3 +32,7 @@
   (is (= p (daw/accept-project p)))
   (is (nil? (daw/accept-project (assoc p :project/schema "foreign/v1"))))
   (is (nil? (daw/accept-project [:not :a :project]))))
+(deftest versioned-crash-recovery
+  (is (= p (daw/recover-project (daw/recovery-envelope p))))
+  (is (nil? (daw/recover-project {:recovery/version 999 :recovery/project p})))
+  (is (nil? (daw/recover-project {:recovery/version 1 :recovery/project (assoc p :project/schema "foreign/v1")}))))

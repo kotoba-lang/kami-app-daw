@@ -68,3 +68,8 @@
           [:invalid-clip (:clip/id c)]))))
 (defn accept-project [value]
   (when (and (map? value) (empty? (validate-project value))) value))
+(def recovery-version 1)
+(defn recovery-envelope [p] {:recovery/version recovery-version :recovery/project p})
+(defn recover-project [value]
+  (when (and (map? value) (= recovery-version (:recovery/version value)))
+    (accept-project (:recovery/project value))))
