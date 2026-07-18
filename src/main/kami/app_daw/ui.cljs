@@ -1,5 +1,5 @@
 (ns kami.app-daw.ui (:require [reagent.core :as r] [reagent.dom.client :as rdom]
-                              [cljs.reader :as reader] [kami.app-daw.core :as daw]))
+                              [kami.app-daw.core :as daw] [kami.app-daw.audio :as audio]))
 (def sample (daw/project {:project/id "demo-song" :project/name "夜明けの波形"
  :project/tracks [{:track/id "drums" :track/name "Drums" :track/color "#ff8a65" :track/gain 0.82
                    :track/clips [{:clip/id "beat-a" :clip/name "Beat A" :clip/start-tick 0 :clip/length-ticks 1920}]}
@@ -7,7 +7,16 @@
                    :track/clips [{:clip/id "chords" :clip/name "Chords" :clip/start-tick 960 :clip/length-ticks 2880}]}
                   {:track/id "voice" :track/name "Voice" :track/color "#c4b5fd" :track/gain 0.9
                    :track/clips [{:clip/id "hook" :clip/name "Hook" :clip/start-tick 2400 :clip/length-ticks 1440}]}]}))
-(defonce state (r/atom {:project sample :playing? false :tick 1440}))
+(defonce state (r/atom {:project sample :playing? false :tick 1440 :cutoff 4200 :delay 0.12 :exporting? false}))
+(defn toggle-play! []
+  (if (:playing? @state)
+    (do (audio/stop!) (swap! state assoc :playing? false))
+    (do (audio/play! (:project @state) (select-keys @state [:cutoff :delay]))
+        (swap! state assoc :playing? true))))
+(defn export! []
+  (swap! state assoc :exporting? true)
+  (audio/export-wav! (:project @state) (select-keys @state [:cutoff :delay])
+                     #(swap! state assoc :exporting? false)))
 (defn track-row [track total]
   [:div.track-row [:div.track-head [:strong (:track/name track)]
     [:div.buttons [:button {:on-click #(swap! state update :project daw/set-track (:track/id track) :track/mute? (not (:track/mute? track)))} (if (:track/mute? track) "M ✓" "M")]
@@ -22,15 +31,18 @@
                    :on-click #(swap! state assoc :tick (:clip/start-tick clip))} (:clip/name clip)])]])
 (defn app [] (let [{:keys [project playing? tick]} @state total (max 3840 (daw/duration-ticks project))]
  [:main [:header [:div [:small "KOTOBA-LANG / MUSIC"] [:h1 "KAMI DAW"]]
-   [:div.transport [:button.primary {:on-click #(swap! state update :playing? not)} (if playing? "❚❚ Pause" "▶ Play")]
+   [:div.transport [:button.primary {:on-click toggle-play!} (if playing? "■ Stop" "▶ Play audio")]
     [:span (str "Tick " tick)] [:span (str (.toFixed (daw/tick->seconds project tick) 2) " s")]]]
   [:section.meta [:label "Project" [:input {:value (:project/name project) :on-change #(swap! state assoc-in [:project :project/name] (.. % -target -value))}]]
    [:label "Tempo" [:input {:type "number" :value (:project/bpm project) :on-change #(swap! state assoc-in [:project :project/bpm] (js/parseInt (.. % -target -value)))}]]
+   [:label "Low-pass" [:input {:type "range" :min 300 :max 12000 :step 100 :value (:cutoff @state) :on-change #(swap! state assoc :cutoff (js/parseFloat (.. % -target -value)))}]]
+   [:label "Delay" [:input {:type "range" :min 0 :max .5 :step .01 :value (:delay @state) :on-change #(swap! state assoc :delay (js/parseFloat (.. % -target -value)))}]]
+   [:button {:on-click export! :disabled (:exporting? @state)} (if (:exporting? @state) "Rendering…" "Export WAV")]
    [:button {:on-click #(js/navigator.clipboard.writeText (pr-str project))} "Copy EDN"]]
   [:section.editor [:div.ruler [:span "1"] [:span "2"] [:span "3"] [:span "4"]]
    (for [track (:project/tracks project)] ^{:key (:track/id track)} [track-row track total])
    [:input.scrub {:type "range" :min 0 :max total :value tick :on-change #(swap! state assoc :tick (js/parseInt (.. % -target -value)))}]]
-  [:footer (if-let [errors (seq (daw/validate-project project))] (str "Errors: " errors) "EDN project valid • browser prototype")]]))
+  [:footer (if-let [errors (seq (daw/validate-project project))] (str "Errors: " errors) "Web Audio playback • low-pass + delay effects • offline WAV master")]]))
 (defonce root-node (atom nil))
 (defn init! []
   (when-not @root-node
