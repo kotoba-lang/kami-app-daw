@@ -22,6 +22,14 @@
     (is (= [[:invalid-bus-automation-order "master"]]
            (daw/validate-project (assoc-in automated [:project/buses 0 :bus/gain-automation]
                                            [{:automation/tick 960 :automation/gain 1} {:automation/tick 0 :automation/gain 1}]))))))
+(deftest project-authoritative-send-automation
+  (let [automated (daw/set-send-automation p "t" [{:tick 960 :send 2} {:tick 0 :send 0.1}])]
+    (is (= [{:automation/tick 0 :automation/send 0.1} {:automation/tick 960 :automation/send 1}]
+           (get-in automated [:project/tracks 0 :track/send-automation])))
+    (is (empty? (daw/validate-project automated)))
+    (is (= [[:invalid-send-automation-order "t"]]
+           (daw/validate-project (assoc-in automated [:project/tracks 0 :track/send-automation]
+                                           [{:automation/tick 960 :automation/send 1} {:automation/tick 0 :automation/send 0}]))))))
 (deftest bus-routing
   (let [routed (daw/route-track p "t" "master" 0.35)]
     (is (= ["master" 0.35] ((juxt :track/bus-id :track/send) (get-in routed [:project/tracks 0]))))
