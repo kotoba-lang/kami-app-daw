@@ -98,8 +98,10 @@
                         (doseq [[parameter descriptor] parameters
                                 :let [audio-param (.get (.-parameters node) (name parameter))]]
                           (when audio-param
-                            (set! (.-value audio-param)
-                                  (get-in plugin [:plugin/parameters parameter] (:parameter/default descriptor)))))
+                            (schedule-effect-param!
+                             audio-param project start
+                             (get-in plugin [:plugin/parameters parameter] (:parameter/default descriptor))
+                             (get-in plugin [:plugin/automation parameter]))))
                         (.connect input node) node)
                       input)) mix (:project/plugins project))]
       (.connect output analyser))

@@ -58,6 +58,17 @@
     (is (empty? (daw/validate-project edited)))
     (is (= [[:invalid-plugin "comp"]]
            (daw/validate-project (assoc-in edited [:project/plugins 0 :plugin/parameters :unknown] 1))))))
+(deftest plugin-parameter-automation-is-sorted-and-bounded
+  (let [automated (-> p (daw/add-plugin "comp" :kami/compressor)
+                      (daw/set-plugin-automation "comp" :threshold-db
+                                                 [{:tick 960 :value 8} {:tick -4 :value -80}]))]
+    (is (= [{:automation/tick 0 :automation/value -60.0}
+            {:automation/tick 960 :automation/value 0.0}]
+           (get-in automated [:project/plugins 0 :plugin/automation :threshold-db])))
+    (is (empty? (daw/validate-project automated)))
+    (is (= [[:invalid-plugin "comp"]]
+           (daw/validate-project
+            (assoc-in automated [:project/plugins 0 :plugin/automation :threshold-db 0 :automation/value] -90))))))
 (deftest project-authoritative-bus-automation
   (let [automated (daw/set-bus-gain-automation p "master" [{:tick 960 :gain 0.25} {:tick 0 :gain 1.0}])]
     (is (= [{:automation/tick 0 :automation/gain 1.0} {:automation/tick 960 :automation/gain 0.25}]

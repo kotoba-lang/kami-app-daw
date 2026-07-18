@@ -154,7 +154,8 @@
     (update p :project/plugins conj
             {:plugin/id plugin-id :plugin/kind plugin-kind :plugin/type :audio-worklet
              :plugin/processor (get-in plugin-types [plugin-kind :plugin/processor])
-             :plugin/enabled? true :plugin/parameters (plugin-parameter-defaults plugin-kind)})
+             :plugin/enabled? true :plugin/parameters (plugin-parameter-defaults plugin-kind)
+             :plugin/automation {}})
     p))
 (defn set-plugin-enabled [p plugin-id enabled?]
   (update p :project/plugins
@@ -167,6 +168,20 @@
                      (if-let [{minimum :parameter/min maximum :parameter/max}
                               (get-in plugin-types [(:plugin/kind plugin) :plugin/parameters parameter])]
                        (assoc-in plugin [:plugin/parameters parameter] (max minimum (min maximum value))) plugin)
+                     plugin)) %)))
+(defn set-plugin-automation [p plugin-id parameter points]
+  (update p :project/plugins
+          #(mapv (fn [plugin]
+                   (if (= plugin-id (:plugin/id plugin))
+                     (if-let [{minimum :parameter/min maximum :parameter/max}
+                              (get-in plugin-types [(:plugin/kind plugin) :plugin/parameters parameter])]
+                       (assoc-in plugin [:plugin/automation parameter]
+                                 (->> points
+                                      (mapv (fn [{:keys [tick value]}]
+                                              {:automation/tick (max 0 tick)
+                                               :automation/value (max minimum (min maximum value))}))
+                                      (sort-by :automation/tick) vec))
+                       plugin)
                      plugin)) %)))
 (defn solo-track-project [p track-id]
   (update p :project/tracks #(vec (filter (fn [track] (= track-id (:track/id track))) %))))
@@ -285,6 +300,14 @@
                         (not (boolean? (:plugin/enabled? plugin)))
                         (not= (set (keys (:plugin/parameters descriptor)))
                               (set (keys (:plugin/parameters plugin))))
+                        (some (fn [[parameter points]]
+                                (let [{minimum :parameter/min maximum :parameter/max}
+                                      (get-in descriptor [:plugin/parameters parameter])]
+                                  (or (nil? minimum)
+                                      (and (seq points) (not (apply <= (map :automation/tick points))))
+                                      (some #(or (neg? (:automation/tick %))
+                                                 (not (<= minimum (:automation/value %) maximum))) points))))
+                              (:plugin/automation plugin))
                         (some (fn [[parameter value]]
                                 (let [{minimum :parameter/min maximum :parameter/max}
                                       (get-in descriptor [:plugin/parameters parameter])]

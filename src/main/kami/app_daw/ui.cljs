@@ -530,14 +530,32 @@
                                    :aria-label (str (:plugin/id plugin) " enabled")
                                    :on-change #(swap! state update :project daw/set-plugin-enabled (:plugin/id plugin)
                                                       (.. % -target -checked))}]]
-      (for [[parameter descriptor] (get-in daw/plugin-types [(:plugin/kind plugin) :plugin/parameters])]
+      (for [[parameter descriptor] (get-in daw/plugin-types [(:plugin/kind plugin) :plugin/parameters])
+            :let [base (get-in plugin [:plugin/parameters parameter])
+                  points (get-in plugin [:plugin/automation parameter])
+                  end-tick (daw/duration-ticks project)
+                  start-value (or (:automation/value (first points)) base)
+                  end-value (or (:automation/value (last points)) base)]]
         ^{:key parameter}
-        [:label (:parameter/name descriptor)
-         [:input {:type "number" :min (:parameter/min descriptor) :max (:parameter/max descriptor)
-                  :step (:parameter/step descriptor) :value (get-in plugin [:plugin/parameters parameter])
+        [:span.effect-automation
+         [:label (:parameter/name descriptor)
+          [:input {:type "number" :min (:parameter/min descriptor) :max (:parameter/max descriptor)
+                  :step (:parameter/step descriptor) :value base
                   :aria-label (str (:plugin/id plugin) " " (name parameter))
                   :on-change #(swap! state update :project daw/set-plugin-parameter (:plugin/id plugin) parameter
-                                     (js/parseFloat (.. % -target -value)))}]])])
+                                     (js/parseFloat (.. % -target -value)))}]]
+         [:label "A→" [:input {:type "number" :min (:parameter/min descriptor) :max (:parameter/max descriptor)
+                                :step (:parameter/step descriptor) :value start-value
+                                :aria-label (str (:plugin/id plugin) " " (name parameter) " automation start")
+                                :on-change #(swap! state update :project daw/set-plugin-automation (:plugin/id plugin) parameter
+                                                   [{:tick 0 :value (js/parseFloat (.. % -target -value))}
+                                                    {:tick end-tick :value end-value}])}]]
+         [:label "→B" [:input {:type "number" :min (:parameter/min descriptor) :max (:parameter/max descriptor)
+                                :step (:parameter/step descriptor) :value end-value
+                                :aria-label (str (:plugin/id plugin) " " (name parameter) " automation end")
+                                :on-change #(swap! state update :project daw/set-plugin-automation (:plugin/id plugin) parameter
+                                                   [{:tick 0 :value start-value}
+                                                    {:tick end-tick :value (js/parseFloat (.. % -target -value))}])}]]])])
    (for [bus (:project/buses project)
          :let [end-tick (daw/duration-ticks project) points (:bus/gain-automation bus)
                start-gain (or (:automation/gain (first points)) (:bus/gain bus) 1)
