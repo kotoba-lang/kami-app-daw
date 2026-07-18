@@ -23,6 +23,7 @@
                            :project/master-effects {:filter/cutoff-hz 4200.0 :delay/time-sec 0.12 :delay/feedback 0.28
                                                     :effect/automation {}}
                            :project/plugins []
+                           :project/midi-mappings []
                            :project/assets {} :project/tracks []} m))
 (defn register-asset
   ([p asset-id name] (register-asset p asset-id name nil))
@@ -163,8 +164,38 @@
   (update p :project/plugins
           #(mapv (fn [plugin] (if (= plugin-id (:plugin/id plugin))
                                 (assoc plugin :plugin/enabled? (boolean enabled?)) plugin)) %)))
+(declare set-plugin-mix write-plugin-mix-automation)
+(defn set-midi-cc-mapping [p mapping-id channel cc plugin-id]
+  (if (and (string? mapping-id) (not (empty? mapping-id))
+           (integer? channel) (<= 1 channel 16) (integer? cc) (<= 0 cc 127)
+           (some #(= plugin-id (:plugin/id %)) (:project/plugins p)))
+    (let [mapping {:midi/id mapping-id :midi/channel channel :midi/cc cc
+                   :target/type :plugin/mix :target/plugin-id plugin-id}]
+      (update p :project/midi-mappings
+              (fn [mappings]
+                (->> (conj (vec (remove #(or (= mapping-id (:midi/id %))
+                                              (and (= channel (:midi/channel %)) (= cc (:midi/cc %))))
+                                         mappings)) mapping)
+                     (sort-by (juxt :midi/channel :midi/cc :midi/id)) vec))))
+    p))
+(defn remove-midi-mapping [p mapping-id]
+  (update p :project/midi-mappings #(vec (remove (fn [mapping] (= mapping-id (:midi/id mapping))) %))))
+(defn midi-mapping-for [p channel cc]
+  (first (filter #(and (= channel (:midi/channel %)) (= cc (:midi/cc %)))
+                 (:project/midi-mappings p))))
+(defn apply-midi-cc [p channel cc midi-value tick]
+  (if-let [mapping (midi-mapping-for p channel cc)]
+    (let [value (/ (max 0 (min 127 (or midi-value 0))) 127.0)
+          plugin-id (:target/plugin-id mapping)]
+      (-> p
+          (set-plugin-mix plugin-id value)
+          (write-plugin-mix-automation plugin-id tick value true false)))
+    p))
 (defn remove-plugin [p plugin-id]
-  (update p :project/plugins #(vec (remove (fn [plugin] (= plugin-id (:plugin/id plugin))) %))))
+  (-> p
+      (update :project/plugins #(vec (remove (fn [plugin] (= plugin-id (:plugin/id plugin))) %)))
+      (update :project/midi-mappings
+              #(vec (remove (fn [mapping] (= plugin-id (:target/plugin-id mapping))) %)))))
 (defn move-plugin [p plugin-id direction]
   (let [plugins (vec (:project/plugins p)) index (first (keep-indexed #(when (= plugin-id (:plugin/id %2)) %1) plugins))
         target (when index (+ index (case direction :up -1 :down 1 0)))]
@@ -433,6 +464,19 @@
           [:invalid-plugin (:plugin/id plugin)])
         (when (not= (count (:project/plugins p)) (count (set (map :plugin/id (:project/plugins p)))))
           [:duplicate-plugin-id])
+        (when (not= (count (:project/midi-mappings p))
+                    (count (set (map :midi/id (:project/midi-mappings p)))))
+          [:duplicate-midi-mapping-id])
+        (when (not= (count (:project/midi-mappings p))
+                    (count (set (map (juxt :midi/channel :midi/cc) (:project/midi-mappings p)))))
+          [:duplicate-midi-cc-mapping])
+        (for [mapping (:project/midi-mappings p)
+              :when (or (not (string? (:midi/id mapping))) (empty? (:midi/id mapping))
+                        (not (integer? (:midi/channel mapping))) (not (<= 1 (:midi/channel mapping) 16))
+                        (not (integer? (:midi/cc mapping))) (not (<= 0 (:midi/cc mapping) 127))
+                        (not= :plugin/mix (:target/type mapping))
+                        (not (some #(= (:target/plugin-id mapping) (:plugin/id %)) (:project/plugins p))))]
+          [:invalid-midi-mapping (:midi/id mapping)])
         (let [bus-ids (set (map :bus/id (:project/buses p)))]
           (for [track (:project/tracks p)
                 :when (and (:track/bus-id track) (not (contains? bus-ids (:track/bus-id track))))]
