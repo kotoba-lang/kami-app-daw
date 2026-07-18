@@ -8,7 +8,7 @@
                    :track/clips [{:clip/id "chords" :clip/name "Chords" :clip/start-tick 960 :clip/length-ticks 2880}]}
                   {:track/id "voice" :track/name "Voice" :track/color "#c4b5fd" :track/gain 0.9
                    :track/clips [{:clip/id "hook" :clip/name "Hook" :clip/start-tick 2400 :clip/length-ticks 1440}]}]}))
-(defonce state (r/atom {:project sample :history daw/empty-history :history-replaying? false :clip-drag nil :clip-preview nil :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :analyzing? false :loudness-report nil :normalize-export? true :target-lufs -14 :true-peak-ceiling-db -1 :stem-exporting nil :stem-bundle-exporting? false :directory-searching? false :directory-result nil :recording nil :recording-loop nil :recording-cancelled? false :input-monitoring? false :input-monitor-active? false :input-monitor-gain 0.35 :input-monitor-db -96 :recording-error nil :project-error nil :recovered? false :punch-length-ticks 960 :loop-takes 3 :mackie-bank 0 :buffers {} :assets {}}))
+(defonce state (r/atom {:project sample :history daw/empty-history :history-replaying? false :clip-drag nil :clip-preview nil :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :analyzing? false :loudness-report nil :normalize-export? true :target-lufs -14 :true-peak-ceiling-db -1 :stem-exporting nil :stem-bundle-exporting? false :directory-searching? false :directory-result nil :recording nil :recording-loop nil :recording-cancelled? false :input-monitoring? false :input-monitor-active? false :input-monitor-gain 0.35 :input-monitor-db -96 :recording-error nil :project-error nil :recovered? false :punch-length-ticks 960 :loop-takes 3 :mackie-bank 0 :mackie-touched-strips #{} :buffers {} :assets {}}))
 (defonce meter-timer (atom nil))
 (defonce transport-timer (atom nil))
 (defonce transport-origin (atom nil))
@@ -44,10 +44,23 @@
             :stop (stop-playback!))
           (swap! state assoc :midi-last-message (str "Transport " (name transport-command))))
       (if-let [mackie (daw/mackie-channel-message status data1 data2 (:mackie-bank @state))]
-        (if (= :bank (:mackie/action mackie))
+        (case (:mackie/action mackie)
+          :bank
           (let [bank (daw/mackie-bank-offset (:mackie-bank @state) (:mackie/delta mackie)
                                              (count (get-in @state [:project :project/tracks])))]
-            (swap! state assoc :mackie-bank bank :midi-last-message (str "Mackie bank " (inc (quot bank 8)))))
+            (swap! state assoc :mackie-bank bank :mackie-touched-strips #{}
+                   :midi-last-message (str "Mackie bank " (inc (quot bank 8)))))
+
+          :fader-touch
+          (let [strip (:mackie/strip mackie) touched? (:mackie/touched? mackie)
+                track (get-in @state [:project :project/tracks strip])]
+            (swap! state update :mackie-touched-strips (if touched? (fnil conj #{}) disj) strip)
+            (swap! state assoc :midi-last-message
+                   (str "Mackie strip " (inc strip) (if touched? " touch" " release")))
+            (when (and track (not touched?))
+              (send-mackie-feedback! (assoc mackie :mackie/action :fader
+                                            :mackie/value (or (:track/gain track) 1.0)) true)))
+
           (let [project (daw/apply-mackie-channel (:project @state) mackie)
                 track (get (:project/tracks project) (:mackie/strip mackie))]
             (when track
@@ -59,7 +72,8 @@
                 (swap! state assoc :project project
                        :midi-last-message (str "Mackie strip " (inc (:mackie/strip mackie)) " "
                                                (name (:mackie/action mackie))))
-                (send-mackie-feedback! feedback enabled?)))))
+                (when (daw/mackie-motor-feedback? (:mackie-touched-strips @state) feedback)
+                  (send-mackie-feedback! feedback enabled?))))))
         (when (= command 0xB0)
           (when-let [plugin-id (:midi-learning-plugin @state)]
             (swap! state update :project daw/set-midi-cc-mapping (str "midi:" plugin-id) channel data1 plugin-id)
@@ -403,7 +417,7 @@
                (audio/stop!) (stop-meter!)
                (swap! state assoc :project project :selected (:clip/id first-clip)
                       :tick (or (:clip/start-tick first-clip) 0) :playing? false :project-error nil
-                      :mackie-bank 0 :buffers buffers :assets assets))))
+                      :mackie-bank 0 :mackie-touched-strips #{} :buffers buffers :assets assets))))
           (.catch #(swap! state assoc :project-error (str "Package import failed: " (.-message %))))))))
 (defn load-project! [event]
   (when-let [file (aget (.. event -target -files) 0)]
@@ -415,7 +429,7 @@
                        (audio/stop!) (stop-meter!)
                        (swap! state assoc :project project :selected (:clip/id first-clip)
                               :tick (or (:clip/start-tick first-clip) 0) :playing? false :project-error nil
-                              :mackie-bank 0 :buffers {} :assets {}))
+                              :mackie-bank 0 :mackie-touched-strips #{} :buffers {} :assets {}))
                      (swap! state assoc :project-error "Unsupported or invalid DAW project"))
                    (catch :default error (swap! state assoc :project-error (.-message error)))))))))
 (defn restore-recovery! []
@@ -424,7 +438,8 @@
       (if-let [{:keys [project history]} (daw/recover-workspace (reader/read-string text))]
         (let [first-clip (first (mapcat :track/clips (:project/tracks project)))]
           (swap! state assoc :project project :history history :selected (:clip/id first-clip)
-                 :tick (or (:clip/start-tick first-clip) 0) :mackie-bank 0 :recovered? true :project-error nil))
+                 :tick (or (:clip/start-tick first-clip) 0) :mackie-bank 0 :mackie-touched-strips #{}
+                 :recovered? true :project-error nil))
         (do (.removeItem js/localStorage recovery-key)
             (swap! state assoc :project-error "Discarded invalid recovery data")))
       (catch :default _ (.removeItem js/localStorage recovery-key)))))

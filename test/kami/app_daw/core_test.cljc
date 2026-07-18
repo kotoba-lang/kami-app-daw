@@ -207,6 +207,16 @@
     (is (true? (get-in (daw/apply-mackie-channel project arm) [:project/tracks 8 :track/armed?])))
     (is (= [176 16 70] (daw/mackie-feedback-message (assoc pan :mackie/value 0.1) true)))
     (is (= [144 0 127] (daw/mackie-feedback-message arm true)))))
+(deftest mackie-fader-touch-owns-motor-feedback
+  (let [touch (daw/mackie-channel-message 0x90 0x68 0x7F 8)
+        release (daw/mackie-channel-message 0x90 0x68 0x00 8)
+        fader (daw/mackie-channel-message 0xE0 0x7F 0x7F 8)]
+    (is (= {:mackie/action :fader-touch :mackie/strip 8 :mackie/local-strip 0
+            :mackie/touched? true} touch))
+    (is (false? (:mackie/touched? release)))
+    (is (false? (daw/mackie-motor-feedback? #{8} fader)))
+    (is (true? (daw/mackie-motor-feedback? #{} fader)))
+    (is (true? (daw/mackie-motor-feedback? #{9} fader)))))
 (deftest project-authoritative-bus-automation
   (let [automated (daw/set-bus-gain-automation p "master" [{:tick 960 :gain 0.25} {:tick 0 :gain 1.0}])]
     (is (= [{:automation/tick 0 :automation/gain 1.0} {:automation/tick 960 :automation/gain 0.25}]
