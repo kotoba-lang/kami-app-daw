@@ -10,6 +10,8 @@
 (defn seconds->ticks [p seconds]
   (long (#?(:clj Math/round :cljs js/Math.round)
          (/ (* seconds (:project/bpm p) (:project/ppq p)) 60.0))))
+(defn punch-duration-seconds [p length-ticks]
+  (tick->seconds p (max 1 length-ticks)))
 (defn move-clip [p clip-id tick]
   (update p :project/tracks
           (fn [tracks] (mapv (fn [track] (update track :track/clips

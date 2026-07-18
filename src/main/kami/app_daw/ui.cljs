@@ -7,7 +7,7 @@
                    :track/clips [{:clip/id "chords" :clip/name "Chords" :clip/start-tick 960 :clip/length-ticks 2880}]}
                   {:track/id "voice" :track/name "Voice" :track/color "#c4b5fd" :track/gain 0.9
                    :track/clips [{:clip/id "hook" :clip/name "Hook" :clip/start-tick 2400 :clip/length-ticks 1440}]}]}))
-(defonce state (r/atom {:project sample :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :stem-exporting nil :recording nil :recording-error nil :buffers {} :assets {}}))
+(defonce state (r/atom {:project sample :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :stem-exporting nil :recording nil :recording-error nil :punch-length-ticks 960 :buffers {} :assets {}}))
 (defonce meter-timer (atom nil))
 (defonce recorder-runtime (atom nil))
 (defn start-meter! []
@@ -26,15 +26,15 @@
                              (assoc-in [:assets asset-id] {:name (.-name file) :waveform (audio/waveform buffer 48)})
                              (update :project daw/set-track (:track/id track) :track/clips
                                      (mapv #(assoc % :clip/asset-id asset-id) (:track/clips track)))))))))))
-(defn finish-recording! [{:keys [track-id start-tick started-ms chunks stream]}]
+(defn finish-recording! [{:keys [track-id start-tick planned-sec chunks stream stop-timer]}]
+  (when stop-timer (js/clearTimeout stop-timer))
   (doseq [media-track (array-seq (.getTracks stream))] (.stop media-track))
   (let [blob (js/Blob. chunks #js {:type "audio/webm"})
         asset-id (str "recording:" (.now js/Date))
-        clip-id (str "take-" (.now js/Date))
-        elapsed (/ (- (js/performance.now) started-ms) 1000)]
+        clip-id (str "take-" (.now js/Date))]
     (audio/decode-file! blob
       (fn [buffer]
-        (let [duration (max 0.01 (min elapsed (.-duration buffer)))]
+        (let [duration planned-sec]
           (swap! state (fn [s]
                          (-> s (assoc :recording nil :recording-error nil)
                              (assoc-in [:buffers asset-id] buffer)
@@ -48,11 +48,14 @@
   (-> (.getUserMedia (.-mediaDevices js/navigator) #js {:audio true})
       (.then (fn [stream]
                (let [recorder (js/MediaRecorder. stream) chunks (array)
-                     session {:track-id track-id :start-tick (:tick @state) :started-ms (js/performance.now)
-                              :chunks chunks :stream stream :recorder recorder}]
+                     planned-sec (daw/punch-duration-seconds (:project @state) (:punch-length-ticks @state))
+                     session (atom {:track-id track-id :start-tick (:tick @state) :planned-sec planned-sec
+                                    :chunks chunks :stream stream :recorder recorder})]
                  (set! (.-ondataavailable recorder) #(when (pos? (.. % -data -size)) (.push chunks (.-data %))))
-                 (set! (.-onstop recorder) #(do (reset! recorder-runtime nil) (finish-recording! session)))
-                 (reset! recorder-runtime session) (swap! state assoc :recording track-id) (.start recorder 100))))
+                 (set! (.-onstop recorder) #(do (reset! recorder-runtime nil) (finish-recording! @session)))
+                 (reset! recorder-runtime @session) (swap! state assoc :recording track-id) (.start recorder 100)
+                 (let [timer (js/setTimeout #(.stop recorder) (* 1000 planned-sec))]
+                   (swap! session assoc :stop-timer timer) (swap! recorder-runtime assoc :stop-timer timer)))))
       (.catch #(swap! state assoc :recording nil :recording-error (.-message %)))))
 (defn toggle-play! []
   (if (:playing? @state)
@@ -124,6 +127,8 @@
    [:label "Tempo" [:input {:type "number" :value (:project/bpm project) :on-change #(swap! state assoc-in [:project :project/bpm] (js/parseInt (.. % -target -value)))}]]
    [:label "Low-pass" [:input {:type "range" :min 300 :max 12000 :step 100 :value (:cutoff @state) :on-change #(swap! state assoc :cutoff (js/parseFloat (.. % -target -value)))}]]
    [:label "Delay" [:input {:type "range" :min 0 :max 0.5 :step 0.01 :value (:delay @state) :on-change #(swap! state assoc :delay (js/parseFloat (.. % -target -value)))}]]
+   [:label "Punch ticks" [:input {:type "number" :min 1 :step 120 :value (:punch-length-ticks @state) :aria-label "Punch length ticks"
+                                   :on-change #(swap! state assoc :punch-length-ticks (max 1 (js/parseInt (.. % -target -value))))}]]
    [:button {:on-click export! :disabled (:exporting? @state)} (if (:exporting? @state) "Rendering…" "Export WAV")]
    [:button {:on-click #(js/navigator.clipboard.writeText (pr-str project))} "Copy EDN"]]
   (when-let [error (:recording-error @state)] [:section.meta [:strong (str "Recording error: " error)]])

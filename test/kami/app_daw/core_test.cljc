@@ -25,3 +25,6 @@
     (is (= ["take-1" "recording:1" 480 1200]
            ((juxt :clip/id :clip/asset-id :clip/start-tick :clip/length-ticks) clip)))
     (is (empty? (daw/validate-project recorded)))))
+(deftest punch-range-uses-musical-time
+  (is (= 1.0 (daw/punch-duration-seconds p 960)))
+  (is (= 0 (daw/seconds->ticks p 0))))
