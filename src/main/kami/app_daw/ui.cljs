@@ -530,11 +530,26 @@
                                    :aria-label (str (:plugin/id plugin) " enabled")
                                    :on-change #(swap! state update :project daw/set-plugin-enabled (:plugin/id plugin)
                                                       (.. % -target -checked))}]]
-      [:label "Wet mix" [:input {:type "number" :min 0 :max 1 :step 0.05
+      (let [mix-value (or (:plugin/mix plugin) 1) mix-points (:plugin/mix-automation plugin)
+            mix-start (or (:automation/value (first mix-points)) mix-value)
+            mix-end (or (:automation/value (last mix-points)) mix-value)
+            end-tick (daw/duration-ticks project)]
+       [:span.effect-automation
+        [:label "Wet mix" [:input {:type "number" :min 0 :max 1 :step 0.05
                                    :value (or (:plugin/mix plugin) 1)
                                    :aria-label (str (:plugin/id plugin) " wet mix")
                                    :on-change #(swap! state update :project daw/set-plugin-mix (:plugin/id plugin)
                                                       (js/parseFloat (.. % -target -value)))}]]
+        [:label "A→" [:input {:type "number" :min 0 :max 1 :step 0.05 :value mix-start
+                               :aria-label (str (:plugin/id plugin) " wet mix automation start")
+                               :on-change #(swap! state update :project daw/set-plugin-mix-automation (:plugin/id plugin)
+                                                  [{:tick 0 :value (js/parseFloat (.. % -target -value))}
+                                                   {:tick end-tick :value mix-end}])}]]
+        [:label "→B" [:input {:type "number" :min 0 :max 1 :step 0.05 :value mix-end
+                               :aria-label (str (:plugin/id plugin) " wet mix automation end")
+                               :on-change #(swap! state update :project daw/set-plugin-mix-automation (:plugin/id plugin)
+                                                  [{:tick 0 :value mix-start}
+                                                   {:tick end-tick :value (js/parseFloat (.. % -target -value))}])}]]])
       [:button {:aria-label (str "Move " (:plugin/id plugin) " up") :disabled (zero? plugin-index)
                 :on-click #(swap! state update :project daw/move-plugin (:plugin/id plugin) :up)} "↑"]
       [:button {:aria-label (str "Move " (:plugin/id plugin) " down")

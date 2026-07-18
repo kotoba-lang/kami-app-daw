@@ -88,6 +88,17 @@
     (is (empty? (daw/validate-project half)))
     (is (= [[:invalid-plugin "sat"]]
            (daw/validate-project (assoc-in half [:project/plugins 0 :plugin/mix] 1.2))))))
+(deftest plugin-mix-automation-is-complementary-bounded-data
+  (let [automated (-> p (daw/add-plugin "sat" :kami/saturator)
+                      (daw/set-plugin-mix-automation "sat"
+                                                     [{:tick 1920 :value 2} {:tick -5 :value -1}]))]
+    (is (= [{:automation/tick 0 :automation/value 0.0}
+            {:automation/tick 1920 :automation/value 1.0}]
+           (get-in automated [:project/plugins 0 :plugin/mix-automation])))
+    (is (empty? (daw/validate-project automated)))
+    (is (= [[:invalid-plugin "sat"]]
+           (daw/validate-project
+            (assoc-in automated [:project/plugins 0 :plugin/mix-automation 0 :automation/value] -0.1))))))
 (deftest project-authoritative-bus-automation
   (let [automated (daw/set-bus-gain-automation p "master" [{:tick 960 :gain 0.25} {:tick 0 :gain 1.0}])]
     (is (= [{:automation/tick 0 :automation/gain 1.0} {:automation/tick 960 :automation/gain 0.25}]
