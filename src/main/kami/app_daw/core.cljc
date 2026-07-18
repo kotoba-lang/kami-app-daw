@@ -58,6 +58,21 @@
 (defn punch-duration-seconds [p length-ticks]
   (tick->seconds p (max 1 length-ticks)))
 (defn monitor-gain [gain] (max 0 (min 1 (or gain 0))))
+(defn power->lufs [power]
+  (if (pos? power)
+    (+ -0.691 (* 10 (#?(:clj Math/log10 :cljs js/Math.log10) power)))
+    -96.0))
+(defn integrated-lufs [block-powers]
+  (let [absolute (filter #(> (power->lufs %) -70) block-powers)]
+    (if (empty? absolute) -96.0
+        (let [preliminary (power->lufs (/ (reduce + absolute) (count absolute)))
+              relative-gate (- preliminary 10)
+              gated (filter #(> (power->lufs %) relative-gate) absolute)]
+          (if (seq gated) (power->lufs (/ (reduce + gated) (count gated))) -96.0)))))
+(defn normalization-gain-db [measured-lufs true-peak-db target-lufs ceiling-db]
+  (if (<= measured-lufs -95)
+    0.0
+    (min (- target-lufs measured-lufs) (- ceiling-db true-peak-db))))
 (defn move-clip [p clip-id tick]
   (update p :project/tracks
           (fn [tracks] (mapv (fn [track] (update track :track/clips
