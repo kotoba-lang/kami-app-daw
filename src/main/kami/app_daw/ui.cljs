@@ -7,8 +7,9 @@
                    :track/clips [{:clip/id "chords" :clip/name "Chords" :clip/start-tick 960 :clip/length-ticks 2880}]}
                   {:track/id "voice" :track/name "Voice" :track/color "#c4b5fd" :track/gain 0.9
                    :track/clips [{:clip/id "hook" :clip/name "Hook" :clip/start-tick 2400 :clip/length-ticks 1440}]}]}))
-(defonce state (r/atom {:project sample :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :stem-exporting nil :buffers {} :assets {}}))
+(defonce state (r/atom {:project sample :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :stem-exporting nil :recording nil :recording-error nil :buffers {} :assets {}}))
 (defonce meter-timer (atom nil))
+(defonce recorder-runtime (atom nil))
 (defn start-meter! []
   (when @meter-timer (js/clearInterval @meter-timer))
   (reset! meter-timer (js/setInterval #(swap! state assoc :meter-db (audio/meter-db)) 80)))
@@ -25,6 +26,34 @@
                              (assoc-in [:assets asset-id] {:name (.-name file) :waveform (audio/waveform buffer 48)})
                              (update :project daw/set-track (:track/id track) :track/clips
                                      (mapv #(assoc % :clip/asset-id asset-id) (:track/clips track)))))))))))
+(defn finish-recording! [{:keys [track-id start-tick started-ms chunks stream]}]
+  (doseq [media-track (array-seq (.getTracks stream))] (.stop media-track))
+  (let [blob (js/Blob. chunks #js {:type "audio/webm"})
+        asset-id (str "recording:" (.now js/Date))
+        clip-id (str "take-" (.now js/Date))
+        elapsed (/ (- (js/performance.now) started-ms) 1000)]
+    (audio/decode-file! blob
+      (fn [buffer]
+        (let [duration (max 0.01 (min elapsed (.-duration buffer)))]
+          (swap! state (fn [s]
+                         (-> s (assoc :recording nil :recording-error nil)
+                             (assoc-in [:buffers asset-id] buffer)
+                             (assoc-in [:assets asset-id] {:name "Recorded take" :waveform (audio/waveform buffer 48)})
+                             (update :project daw/add-recorded-clip track-id asset-id start-tick duration clip-id)
+                             (assoc :selected clip-id)))))))))
+(defn stop-recording! []
+  (when-let [recorder (:recorder @recorder-runtime)] (.stop recorder)))
+(defn start-recording! [track-id]
+  (swap! state assoc :recording-error nil)
+  (-> (.getUserMedia (.-mediaDevices js/navigator) #js {:audio true})
+      (.then (fn [stream]
+               (let [recorder (js/MediaRecorder. stream) chunks (array)
+                     session {:track-id track-id :start-tick (:tick @state) :started-ms (js/performance.now)
+                              :chunks chunks :stream stream :recorder recorder}]
+                 (set! (.-ondataavailable recorder) #(when (pos? (.. % -data -size)) (.push chunks (.-data %))))
+                 (set! (.-onstop recorder) #(do (reset! recorder-runtime nil) (finish-recording! session)))
+                 (reset! recorder-runtime session) (swap! state assoc :recording track-id) (.start recorder 100))))
+      (.catch #(swap! state assoc :recording nil :recording-error (.-message %)))))
 (defn toggle-play! []
   (if (:playing? @state)
     (do (audio/stop!) (stop-meter!) (swap! state assoc :playing? false))
@@ -54,21 +83,25 @@
      [:button {:on-click #(swap! state update :project daw/set-track (:track/id track) :track/solo? (not (:track/solo? track)))} (if (:track/solo? track) "S ✓" "S")]]
     [:input {:type "file" :accept "audio/*" :aria-label (str "Import " (:track/name track) " audio") :on-change #(import-track! track %)}]
     (when asset [:small (:name asset)])
+    [:button {:aria-label (str (if (= (:track/id track) (:recording @state)) "Stop " "Record ") (:track/name track))
+              :disabled (and (:recording @state) (not= (:track/id track) (:recording @state)))
+              :on-click #(if (= (:track/id track) (:recording @state)) (stop-recording!) (start-recording! (:track/id track)))}
+     (if (= (:track/id track) (:recording @state)) "■ Stop take" "● Record")]
     (let [end-tick (daw/duration-ticks (:project @state)) points (:track/gain-automation track)
           start-gain (or (:automation/gain (first points)) (:track/gain track) 1)
           end-gain (or (:automation/gain (last points)) (:track/gain track) 1)]
       [:div.buttons
-       [:label "A→" [:input {:type "number" :min 0 :max 2 :step .05 :value start-gain :aria-label (str (:track/name track) " automation start") :on-change #(set-automation! track 0 (js/parseFloat (.. % -target -value)))}]]
-       [:label "→B" [:input {:type "number" :min 0 :max 2 :step .05 :value end-gain :aria-label (str (:track/name track) " automation end") :on-change #(set-automation! track end-tick (js/parseFloat (.. % -target -value)))}]]])
-    [:label "Send" [:input {:type "range" :min 0 :max 1 :step .05 :value (or (:track/send track) 0)
+       [:label "A→" [:input {:type "number" :min 0 :max 2 :step 0.05 :value start-gain :aria-label (str (:track/name track) " automation start") :on-change #(set-automation! track 0 (js/parseFloat (.. % -target -value)))}]]
+       [:label "→B" [:input {:type "number" :min 0 :max 2 :step 0.05 :value end-gain :aria-label (str (:track/name track) " automation end") :on-change #(set-automation! track end-tick (js/parseFloat (.. % -target -value)))}]]])
+    [:label "Send" [:input {:type "range" :min 0 :max 1 :step 0.05 :value (or (:track/send track) 0)
                              :aria-label (str (:track/name track) " delay send")
                              :on-change #(swap! state update :project daw/route-track (:track/id track) "master" (js/parseFloat (.. % -target -value)))}]]
     [:button {:on-click #(export-stem! (:track/id track)) :disabled (= (:track/id track) (:stem-exporting @state))}
      (if (= (:track/id track) (:stem-exporting @state)) "Rendering stem…" "Export stem")]
-    [:input {:type "range" :min 0 :max 1 :step .01 :value (:track/gain track)
+    [:input {:type "range" :min 0 :max 1 :step 0.01 :value (:track/gain track)
              :aria-label (str (:track/name track) " gain")
              :on-change #(swap! state update :project daw/set-track (:track/id track) :track/gain (js/parseFloat (.. % -target -value)))}]]
-   [:div.lane (when asset [:div.waveform {:style {:position "absolute" :inset "8px" :display "flex" :align-items "center" :gap "2px" :opacity .45}}
+   [:div.lane (when asset [:div.waveform {:style {:position "absolute" :inset "8px" :display "flex" :align-items "center" :gap "2px" :opacity 0.45}}
                               (for [[i peak] (map-indexed vector (:waveform asset))] ^{:key i} [:i {:style {:display "block" :flex 1 :min-height "2px" :height (str (* 90 peak) "%") :background "#dffcff"}}])])
     (for [clip (:track/clips track)] ^{:key (:clip/id clip)}
     [:button.clip {:style {:left (str (* 100 (/ (:clip/start-tick clip) total)) "%")
@@ -90,14 +123,15 @@
   [:section.meta [:label "Project" [:input {:value (:project/name project) :on-change #(swap! state assoc-in [:project :project/name] (.. % -target -value))}]]
    [:label "Tempo" [:input {:type "number" :value (:project/bpm project) :on-change #(swap! state assoc-in [:project :project/bpm] (js/parseInt (.. % -target -value)))}]]
    [:label "Low-pass" [:input {:type "range" :min 300 :max 12000 :step 100 :value (:cutoff @state) :on-change #(swap! state assoc :cutoff (js/parseFloat (.. % -target -value)))}]]
-   [:label "Delay" [:input {:type "range" :min 0 :max .5 :step .01 :value (:delay @state) :on-change #(swap! state assoc :delay (js/parseFloat (.. % -target -value)))}]]
+   [:label "Delay" [:input {:type "range" :min 0 :max 0.5 :step 0.01 :value (:delay @state) :on-change #(swap! state assoc :delay (js/parseFloat (.. % -target -value)))}]]
    [:button {:on-click export! :disabled (:exporting? @state)} (if (:exporting? @state) "Rendering…" "Export WAV")]
    [:button {:on-click #(js/navigator.clipboard.writeText (pr-str project))} "Copy EDN"]]
+  (when-let [error (:recording-error @state)] [:section.meta [:strong (str "Recording error: " error)]])
   (when-let [clip (selected-clip project (:selected @state))]
     [:section.meta.clip-editor [:strong (str "Edit • " (:clip/name clip))]
-     [:label "Source offset" [:input {:type "number" :min 0 :step .05 :value (or (:clip/source-offset-sec clip) 0) :on-change #(edit-selected! :source-offset-sec (js/parseFloat (.. % -target -value)))}]]
-     [:label "Fade in" [:input {:type "number" :min 0 :step .05 :value (or (:clip/fade-in-sec clip) .02) :on-change #(edit-selected! :fade-in-sec (js/parseFloat (.. % -target -value)))}]]
-     [:label "Fade out" [:input {:type "number" :min 0 :step .05 :value (or (:clip/fade-out-sec clip) .05) :on-change #(edit-selected! :fade-out-sec (js/parseFloat (.. % -target -value)))}]]])
+     [:label "Source offset" [:input {:type "number" :min 0 :step 0.05 :value (or (:clip/source-offset-sec clip) 0) :on-change #(edit-selected! :source-offset-sec (js/parseFloat (.. % -target -value)))}]]
+     [:label "Fade in" [:input {:type "number" :min 0 :step 0.05 :value (or (:clip/fade-in-sec clip) 0.02) :on-change #(edit-selected! :fade-in-sec (js/parseFloat (.. % -target -value)))}]]
+     [:label "Fade out" [:input {:type "number" :min 0 :step 0.05 :value (or (:clip/fade-out-sec clip) 0.05) :on-change #(edit-selected! :fade-out-sec (js/parseFloat (.. % -target -value)))}]]])
   [:section.editor [:div.ruler [:span "1"] [:span "2"] [:span "3"] [:span "4"]]
    (for [track (:project/tracks project)] ^{:key (:track/id track)} [track-row track total])
    [:input.scrub {:type "range" :min 0 :max total :value tick :on-change #(swap! state assoc :tick (js/parseInt (.. % -target -value)))}]]

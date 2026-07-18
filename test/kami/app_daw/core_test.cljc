@@ -19,3 +19,9 @@
     (is (empty? (daw/validate-project routed)))
     (is (= [[:missing-bus "t" "missing"]]
            (daw/validate-project (daw/route-track p "t" "missing" 0.1))))))
+(deftest recorded-take-becomes-authoritative-clip
+  (let [recorded (daw/add-recorded-clip p "t" "recording:1" 480 1.25 "take-1")
+        clip (last (get-in recorded [:project/tracks 0 :track/clips]))]
+    (is (= ["take-1" "recording:1" 480 1200]
+           ((juxt :clip/id :clip/asset-id :clip/start-tick :clip/length-ticks) clip)))
+    (is (empty? (daw/validate-project recorded)))))

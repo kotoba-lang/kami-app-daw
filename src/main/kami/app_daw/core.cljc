@@ -7,6 +7,9 @@
 (defn clip-end [clip] (+ (:clip/start-tick clip) (:clip/length-ticks clip)))
 (defn duration-ticks [p] (reduce max 0 (map clip-end (mapcat :track/clips (:project/tracks p)))))
 (defn tick->seconds [p tick] (/ (* tick 60.0) (* (:project/bpm p) (:project/ppq p))))
+(defn seconds->ticks [p seconds]
+  (long (#?(:clj Math/round :cljs js/Math.round)
+         (/ (* seconds (:project/bpm p) (:project/ppq p)) 60.0))))
 (defn move-clip [p clip-id tick]
   (update p :project/tracks
           (fn [tracks] (mapv (fn [track] (update track :track/clips
@@ -34,6 +37,14 @@
 (defn route-track [p track-id bus-id send]
   (-> p (set-track track-id :track/bus-id bus-id)
       (set-track track-id :track/send (max 0 (min 1 send)))))
+(defn add-recorded-clip [p track-id asset-id start-tick duration-sec clip-id]
+  (let [clip {:clip/id clip-id :clip/name "Recorded take" :clip/asset-id asset-id
+              :clip/start-tick (max 0 start-tick)
+              :clip/length-ticks (max 1 (seconds->ticks p duration-sec))
+              :clip/source-offset-sec 0 :clip/fade-in-sec 0.01 :clip/fade-out-sec 0.03}]
+    (update p :project/tracks
+            #(mapv (fn [track] (if (= track-id (:track/id track))
+                                 (update track :track/clips (fnil conj []) clip) track)) %))))
 (defn validate-project [p]
   (vec (concat
         (when-not (= schema (:project/schema p)) [:unsupported-schema])

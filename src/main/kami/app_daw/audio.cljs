@@ -2,7 +2,7 @@
   (:require [kami.app-daw.core :as daw]))
 
 (defonce runtime (atom nil))
-(def frequencies {"drums" 110 "synth" 261.63 "voice" 329.63})
+(def oscillator-frequencies {"drums" 110 "synth" 261.63 "voice" 329.63})
 
 (defn- audio-context []
   (let [Ctor (or (.-AudioContext js/window) (.-webkitAudioContext js/window))]
@@ -70,7 +70,7 @@
             level 0.16]
         (if buffer (set! (.-buffer source) buffer)
             (do (set! (.-type source) (if (= "drums" (:track/id track)) "square" "sine"))
-                (set! (.. source -frequency -value) (get frequencies (:track/id track) 220))))
+                (set! (.. source -frequency -value) (get oscillator-frequencies (:track/id track) 220))))
         (.setValueAtTime (.-gain gain) 0 begin)
         (.linearRampToValueAtTime (.-gain gain) level (+ begin fade-in))
         (.setValueAtTime (.-gain gain) level (+ begin (max fade-in (- actual-duration fade-out))))
