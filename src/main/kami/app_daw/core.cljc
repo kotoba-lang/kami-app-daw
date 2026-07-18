@@ -212,6 +212,36 @@
   ({0xFA :start 0xFB :continue 0xFC :stop} status))
 (defn midi-transport-message [command]
   (case command :start [0xFA] :continue [0xFB] :stop [0xFC] nil))
+(defn mackie-channel-message [status data1 data2]
+  (let [command (bit-and status 0xF0) strip (bit-and status 0x0F)]
+    (cond
+      (and (= command 0xE0) (< strip 8))
+      {:mackie/action :fader :mackie/strip strip
+       :mackie/value (/ (+ (bit-and data1 0x7F) (bit-shift-left (bit-and data2 0x7F) 7)) 16383.0)}
+      (and (= command 0x90) (pos? data2) (<= 0x08 data1 0x0F))
+      {:mackie/action :solo :mackie/strip (- data1 0x08)}
+      (and (= command 0x90) (pos? data2) (<= 0x10 data1 0x17))
+      {:mackie/action :mute :mackie/strip (- data1 0x10)}
+      :else nil)))
+(defn apply-mackie-channel [p message]
+  (let [strip (:mackie/strip message)]
+    (if (and (nat-int? strip) (< strip (count (:project/tracks p))))
+      (update-in p [:project/tracks strip]
+                 (fn [track]
+                   (case (:mackie/action message)
+                     :fader (assoc track :track/gain (max 0 (min 1 (:mackie/value message))))
+                     :mute (update track :track/mute? not)
+                     :solo (update track :track/solo? not)
+                     track)))
+      p)))
+(defn mackie-feedback-message [message enabled?]
+  (case (:mackie/action message)
+    :fader (let [value (long (#?(:clj Math/round :cljs js/Math.round)
+                                (* 16383 (max 0 (min 1 (:mackie/value message))))))]
+             [(+ 0xE0 (:mackie/strip message)) (bit-and value 0x7F) (bit-and (bit-shift-right value 7) 0x7F)])
+    :solo [0x90 (+ 0x08 (:mackie/strip message)) (if enabled? 127 0)]
+    :mute [0x90 (+ 0x10 (:mackie/strip message)) (if enabled? 127 0)]
+    nil))
 (defn apply-midi-cc [p channel cc midi-value tick]
   (if-let [mapping (midi-mapping-for p channel cc)]
     (let [value (/ (max 0 (min 127 (or midi-value 0))) 127.0)

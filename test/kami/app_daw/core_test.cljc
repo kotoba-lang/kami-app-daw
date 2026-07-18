@@ -182,6 +182,19 @@
            (daw/validate-project (update base :project/midi-mappings conj
                                          {:midi/id "other" :midi/channel 1 :midi/cc 74
                                           :target/type :plugin/mix :target/plugin-id "sat"}))))))
+(deftest mackie-control-channel-strips
+  (let [project (daw/project {:project/tracks [{:track/id "a" :track/gain 0.1}
+                                                {:track/id "b" :track/gain 0.2}]})
+        fader (daw/mackie-channel-message 0xE1 0x7F 0x7F)
+        mute (daw/mackie-channel-message 0x90 0x10 0x7F)
+        solo (daw/mackie-channel-message 0x90 0x09 0x7F)]
+    (is (= {:mackie/action :fader :mackie/strip 1 :mackie/value 1.0} fader))
+    (is (= 1.0 (get-in (daw/apply-mackie-channel project fader) [:project/tracks 1 :track/gain])))
+    (is (true? (get-in (daw/apply-mackie-channel project mute) [:project/tracks 0 :track/mute?])))
+    (is (true? (get-in (daw/apply-mackie-channel project solo) [:project/tracks 1 :track/solo?])))
+    (is (= [225 127 127] (daw/mackie-feedback-message fader true)))
+    (is (= [144 16 127] (daw/mackie-feedback-message mute true)))
+    (is (nil? (daw/mackie-channel-message 0x90 0x10 0)))))
 (deftest project-authoritative-bus-automation
   (let [automated (daw/set-bus-gain-automation p "master" [{:tick 960 :gain 0.25} {:tick 0 :gain 1.0}])]
     (is (= [{:automation/tick 0 :automation/gain 1.0} {:automation/tick 960 :automation/gain 0.25}]
