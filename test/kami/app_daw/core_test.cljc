@@ -78,6 +78,16 @@
     (is (= moved (daw/move-plugin moved "comp" :up)))
     (is (= ["comp"] (mapv :plugin/id (:project/plugins removed))))
     (is (empty? (daw/validate-project removed)))))
+(deftest plugin-wet-dry-mix-is-bounded-project-data
+  (let [plugin (daw/add-plugin p "sat" :kami/saturator)
+        half (daw/set-plugin-mix plugin "sat" 0.35)]
+    (is (= 1.0 (get-in plugin [:project/plugins 0 :plugin/mix])))
+    (is (= 0.35 (get-in half [:project/plugins 0 :plugin/mix])))
+    (is (= 0.0 (get-in (daw/set-plugin-mix half "sat" -2) [:project/plugins 0 :plugin/mix])))
+    (is (= 1.0 (get-in (daw/set-plugin-mix half "sat" 3) [:project/plugins 0 :plugin/mix])))
+    (is (empty? (daw/validate-project half)))
+    (is (= [[:invalid-plugin "sat"]]
+           (daw/validate-project (assoc-in half [:project/plugins 0 :plugin/mix] 1.2))))))
 (deftest project-authoritative-bus-automation
   (let [automated (daw/set-bus-gain-automation p "master" [{:tick 960 :gain 0.25} {:tick 0 :gain 1.0}])]
     (is (= [{:automation/tick 0 :automation/gain 1.0} {:automation/tick 960 :automation/gain 0.25}]

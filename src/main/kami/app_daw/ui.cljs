@@ -530,6 +530,11 @@
                                    :aria-label (str (:plugin/id plugin) " enabled")
                                    :on-change #(swap! state update :project daw/set-plugin-enabled (:plugin/id plugin)
                                                       (.. % -target -checked))}]]
+      [:label "Wet mix" [:input {:type "number" :min 0 :max 1 :step 0.05
+                                   :value (or (:plugin/mix plugin) 1)
+                                   :aria-label (str (:plugin/id plugin) " wet mix")
+                                   :on-change #(swap! state update :project daw/set-plugin-mix (:plugin/id plugin)
+                                                      (js/parseFloat (.. % -target -value)))}]]
       [:button {:aria-label (str "Move " (:plugin/id plugin) " up") :disabled (zero? plugin-index)
                 :on-click #(swap! state update :project daw/move-plugin (:plugin/id plugin) :up)} "↑"]
       [:button {:aria-label (str "Move " (:plugin/id plugin) " down")
