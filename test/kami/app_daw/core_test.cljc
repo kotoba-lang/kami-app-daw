@@ -152,6 +152,18 @@
     (is (empty? (:project/trusted-publishers revoked)))
     (is (= false (get-in revoked [:project/plugins 0 :plugin/enabled?])))
     (is (= :revoked (get-in revoked [:project/plugins 0 :plugin/trust])))))
+(deftest publisher-key-rotation-requires-current-trust-and-keeps-audit-history
+  (let [old (apply str (repeat 64 "a")) new (apply str (repeat 64 "b"))
+        trusted (daw/trust-plugin-publisher p "vendor.audio" old "Vendor")
+        rotated (daw/rotate-plugin-publisher-key trusted "vendor.audio" old new 1700000000)]
+    (is (= new (get-in rotated [:project/trusted-publishers "vendor.audio" :publisher/fingerprint])))
+    (is (= [{:publisher/fingerprint old :publisher/retired-at 1700000000}]
+           (get-in rotated [:project/trusted-publishers "vendor.audio" :publisher/key-history])))
+    (is (daw/trusted-plugin-package? rotated
+                                     {:package/publisher-id "vendor.audio"
+                                      :package/publisher-fingerprint new}))
+    (is (= trusted (daw/rotate-plugin-publisher-key trusted "vendor.audio"
+                                                    (apply str (repeat 64 "c")) new 1)))))
 (deftest plugin-mix-interpolation-is-validated-project-authority
   (let [plugin (daw/add-plugin p "sat" :kami/saturator)
         stepped (daw/set-plugin-mix-interpolation plugin "sat" :step)]
