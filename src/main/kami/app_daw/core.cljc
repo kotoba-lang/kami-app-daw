@@ -4,10 +4,17 @@
 (defn project [m] (merge {:project/schema schema :project/ppq 480 :project/bpm 120
                            :project/buses [{:bus/id "master" :bus/name "Master" :bus/gain 1.0}]
                            :project/assets {} :project/tracks []} m))
-(defn register-asset [p asset-id name]
-  (assoc-in p [:project/assets asset-id] {:asset/name name}))
+(defn register-asset
+  ([p asset-id name] (register-asset p asset-id name nil))
+  ([p asset-id name sha256]
+   (assoc-in p [:project/assets asset-id] (cond-> {:asset/name name} sha256 (assoc :asset/sha256 sha256)))))
 (defn asset-id-by-name [p name]
   (some (fn [[asset-id asset]] (when (= name (:asset/name asset)) asset-id)) (:project/assets p)))
+(defn asset-id-by-signature [p {:keys [name sha256]}]
+  (or (when sha256 (some (fn [[asset-id asset]] (when (= sha256 (:asset/sha256 asset)) asset-id)) (:project/assets p)))
+      (asset-id-by-name p name)))
+(defn missing-asset-ids [p loaded-ids]
+  (->> (keys (:project/assets p)) (remove (set loaded-ids)) sort vec))
 (defn clip-end [clip] (+ (:clip/start-tick clip) (:clip/length-ticks clip)))
 (defn duration-ticks [p] (reduce max 0 (map clip-end (mapcat :track/clips (:project/tracks p)))))
 (defn tick->seconds [p tick] (/ (* tick 60.0) (* (:project/bpm p) (:project/ppq p))))

@@ -11,6 +11,12 @@
 (defonce meter-timer (atom nil))
 (defonce recorder-runtime (atom nil))
 (def recovery-key "kami-app-daw/recovery/v1")
+(defn sha256-file! [file]
+  (-> (.arrayBuffer file)
+      (.then #(.digest (.-subtle js/crypto) "SHA-256" %))
+      (.then (fn [digest]
+               (apply str (map #(.padStart (.toString % 16) 2 "0")
+                               (array-seq (js/Uint8Array. digest))))))))
 (defn start-meter! []
   (when @meter-timer (js/clearInterval @meter-timer))
   (reset! meter-timer (js/setInterval #(swap! state assoc :meter-db (audio/meter-db)) 80)))
@@ -20,21 +26,25 @@
 (defn import-track! [track event]
   (when-let [file (aget (.. event -target -files) 0)]
     (let [asset-id (str "audio:" (:track/id track))]
-      (audio/decode-file! file
-        (fn [buffer]
-          (swap! state (fn [s]
-                         (-> s (assoc-in [:buffers asset-id] buffer)
-                             (assoc-in [:assets asset-id] {:name (.-name file) :waveform (audio/waveform buffer 48)})
-                             (update :project daw/register-asset asset-id (.-name file))
-                             (update :project daw/set-track (:track/id track) :track/clips
-                                     (mapv #(assoc % :clip/asset-id asset-id) (:track/clips track)))))))))))
+      (-> (sha256-file! file)
+          (.then (fn [sha256]
+                   (audio/decode-file! file
+                     (fn [buffer]
+                       (swap! state (fn [s]
+                                      (-> s (assoc-in [:buffers asset-id] buffer)
+                                          (assoc-in [:assets asset-id] {:name (.-name file) :sha256 sha256 :waveform (audio/waveform buffer 48)})
+                                          (update :project daw/register-asset asset-id (.-name file) sha256)
+                                          (update :project daw/set-track (:track/id track) :track/clips
+                                                  (mapv #(assoc % :clip/asset-id asset-id) (:track/clips track))))))))))))))
 (defn relink-audio! [event]
   (doseq [file (array-seq (.. event -target -files))]
-    (when-let [asset-id (daw/asset-id-by-name (:project @state) (.-name file))]
-      (audio/decode-file! file
-        (fn [buffer]
-          (swap! state (fn [s] (-> s (assoc-in [:buffers asset-id] buffer)
-                                    (assoc-in [:assets asset-id] {:name (.-name file) :waveform (audio/waveform buffer 48)})))))))))
+    (-> (sha256-file! file)
+        (.then (fn [sha256]
+                 (when-let [asset-id (daw/asset-id-by-signature (:project @state) {:name (.-name file) :sha256 sha256})]
+                   (audio/decode-file! file
+                     (fn [buffer]
+                       (swap! state (fn [s] (-> s (assoc-in [:buffers asset-id] buffer)
+                                                 (assoc-in [:assets asset-id] {:name (.-name file) :sha256 sha256 :waveform (audio/waveform buffer 48)}))))))))))))
 (defn finish-recording! [{:keys [track-id start-tick planned-sec chunks stream stop-timer]}]
   (when stop-timer (js/clearTimeout stop-timer))
   (doseq [media-track (array-seq (.getTracks stream))] (.stop media-track))
@@ -162,7 +172,8 @@
               :fade-in-sec (or (:clip/fade-in-sec clip) 0.02)
               :fade-out-sec (or (:clip/fade-out-sec clip) 0.05)}]
     (swap! state update :project daw/edit-clip id (assoc edit k value))))
-(defn app [] (let [{:keys [project playing? tick]} @state total (max 3840 (daw/duration-ticks project))]
+(defn app [] (let [{:keys [project playing? tick]} @state total (max 3840 (daw/duration-ticks project))
+                    missing (daw/missing-asset-ids project (keys (:buffers @state)))]
  [:main [:header [:div [:small "KOTOBA-LANG / MUSIC"] [:h1 "KAMI DAW"]]
    [:div.transport [:button.primary {:on-click toggle-play!} (if playing? "■ Stop" "▶ Play audio")]
     [:span (str "Tick " tick)] [:span (str (.toFixed (daw/tick->seconds project tick) 2) " s")]
@@ -180,6 +191,7 @@
    [:button {:on-click #(js/navigator.clipboard.writeText (pr-str project))} "Copy EDN"]]
   (when-let [error (:project-error @state)] [:section.meta [:strong (str "Project error: " error)]])
   (when (:recovered? @state) [:section.meta [:strong "Recovered autosaved project"]])
+  (when (seq missing) [:section.meta.missing-media [:strong (str "Missing media: " (count missing))] [:span (pr-str missing)]])
   (when-let [error (:recording-error @state)] [:section.meta [:strong (str "Recording error: " error)]])
   (when-let [clip (selected-clip project (:selected @state))]
     [:section.meta.clip-editor [:strong (str "Edit • " (:clip/name clip))]

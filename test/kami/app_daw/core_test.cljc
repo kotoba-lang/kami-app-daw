@@ -37,7 +37,10 @@
   (is (nil? (daw/recover-project {:recovery/version 999 :recovery/project p})))
   (is (nil? (daw/recover-project {:recovery/version 1 :recovery/project (assoc p :project/schema "foreign/v1")}))))
 (deftest persisted-asset-relink-manifest
-  (let [registered (daw/register-asset p "audio:t" "take.wav")]
+  (let [registered (daw/register-asset p "audio:t" "take.wav" "abc123")]
     (is (= "audio:t" (daw/asset-id-by-name registered "take.wav")))
-    (is (= {:asset/name "take.wav"} (get-in registered [:project/assets "audio:t"])))
+    (is (= "audio:t" (daw/asset-id-by-signature registered {:name "renamed.wav" :sha256 "abc123"})))
+    (is (= {:asset/name "take.wav" :asset/sha256 "abc123"} (get-in registered [:project/assets "audio:t"])))
+    (is (= ["audio:t"] (daw/missing-asset-ids registered [])))
+    (is (empty? (daw/missing-asset-ids registered ["audio:t"])))
     (is (= registered (daw/recover-project (daw/recovery-envelope registered))))))
