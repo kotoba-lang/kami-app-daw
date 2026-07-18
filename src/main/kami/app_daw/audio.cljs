@@ -152,7 +152,8 @@
                                             (set! (.. gain -gain -value) (or (:bus/gain bus) 1))
                                             (.connect gain destination) [(:bus/id bus) gain])) (:project/buses project)))
         default-bus (or (get bus-nodes "master") destination)
-        send-delay (.createDelay ctx 1.0) send-feedback (.createGain ctx)]
+        send-delay (.createDelay ctx 1.0) send-feedback (.createGain ctx)
+        soloed? (some :track/solo? (:project/tracks project))]
     (doseq [bus (:project/buses project)
             :let [node (get bus-nodes (:bus/id bus))]]
       (schedule-param! (.-gain node) project start (or (:bus/gain bus) 1)
@@ -160,7 +161,7 @@
     (set! (.. send-delay -delayTime -value) 0.18) (set! (.. send-feedback -gain -value) 0.32)
     (.connect send-delay send-feedback) (.connect send-feedback send-delay) (.connect send-delay destination)
     (doseq [track (:project/tracks project)
-            :when (not (:track/mute? track))
+            :when (and (not (:track/mute? track)) (or (not soloed?) (:track/solo? track)))
             clip (:track/clips track)
             :let [window (daw/clip-playback-window project clip locate-tick)]
             :when window]

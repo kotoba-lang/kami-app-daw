@@ -29,6 +29,11 @@
     (when-let [access @midi-access-runtime]
       (doseq [output (array-seq (js/Array.from (.values (or (.-outputs access) (js/Map.)))))]
         (.send output (clj->js message))))))
+(defn send-mackie-feedback! [message enabled?]
+  (when-let [feedback (daw/mackie-feedback-message message enabled?)]
+    (when-let [access @midi-access-runtime]
+      (doseq [output (array-seq (js/Array.from (.values (or (.-outputs access) (js/Map.)))))]
+        (.send output (clj->js feedback))))))
 (defn handle-midi-message! [event]
   (let [data (.-data event) status (aget data 0) data1 (aget data 1) data2 (aget data 2)
         command (bit-and status 0xF0) channel (inc (bit-and status 0x0F))]
@@ -38,20 +43,30 @@
             :continue (start-playback! false)
             :stop (stop-playback!))
           (swap! state assoc :midi-last-message (str "Transport " (name transport-command))))
-      (when (= command 0xB0)
-      (when-let [plugin-id (:midi-learning-plugin @state)]
-        (swap! state update :project daw/set-midi-cc-mapping (str "midi:" plugin-id) channel data1 plugin-id)
-        (swap! state assoc :midi-learning-plugin nil
-               :midi-last-message (str "Learned Ch " channel " CC " data1 " → " plugin-id)))
-      (when-let [mapping (daw/midi-mapping-for (:project @state) channel data1)]
-        (let [plugin-id (:target/plugin-id mapping)
-              mode (some (fn [plugin] (when (= plugin-id (:plugin/id plugin))
-                                        (:plugin/automation-mode plugin)))
-                         (get-in @state [:project :project/plugins]))]
-          (when (= mode :latch) (swap! state update :mix-latched (fnil conj #{}) plugin-id))
-          (swap! state update :project daw/apply-midi-cc channel data1 data2 (:tick @state))
-          (send-midi-feedback! plugin-id (/ data2 127.0))
-          (swap! state assoc :midi-last-message (str "Ch " channel " CC " data1 " = " data2))))))))
+      (if-let [mackie (daw/mackie-channel-message status data1 data2)]
+        (let [project (daw/apply-mackie-channel (:project @state) mackie)
+              track (get (:project/tracks project) (:mackie/strip mackie))]
+          (when track
+            (let [enabled? (case (:mackie/action mackie)
+                             :mute (:track/mute? track) :solo (:track/solo? track) true)]
+              (swap! state assoc :project project
+                     :midi-last-message (str "Mackie strip " (inc (:mackie/strip mackie)) " "
+                                             (name (:mackie/action mackie))))
+              (send-mackie-feedback! mackie enabled?))))
+        (when (= command 0xB0)
+          (when-let [plugin-id (:midi-learning-plugin @state)]
+            (swap! state update :project daw/set-midi-cc-mapping (str "midi:" plugin-id) channel data1 plugin-id)
+            (swap! state assoc :midi-learning-plugin nil
+                   :midi-last-message (str "Learned Ch " channel " CC " data1 " → " plugin-id)))
+          (when-let [mapping (daw/midi-mapping-for (:project @state) channel data1)]
+            (let [plugin-id (:target/plugin-id mapping)
+                  mode (some (fn [plugin] (when (= plugin-id (:plugin/id plugin))
+                                            (:plugin/automation-mode plugin)))
+                             (get-in @state [:project :project/plugins]))]
+              (when (= mode :latch) (swap! state update :mix-latched (fnil conj #{}) plugin-id))
+              (swap! state update :project daw/apply-midi-cc channel data1 data2 (:tick @state))
+              (send-midi-feedback! plugin-id (/ data2 127.0))
+              (swap! state assoc :midi-last-message (str "Ch " channel " CC " data1 " = " data2)))))))))
 (defn bind-midi-inputs! [access]
   (doseq [input (array-seq (js/Array.from (.values (.-inputs access))))]
     (set! (.-onmidimessage input) handle-midi-message!))
