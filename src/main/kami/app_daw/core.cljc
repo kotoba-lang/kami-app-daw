@@ -166,7 +166,39 @@
                         :ratio {:parameter/name "Ratio" :parameter/min 1.0 :parameter/max 20.0
                                 :parameter/default 4.0 :parameter/step 0.5}
                         :makeup-db {:parameter/name "Makeup dB" :parameter/min 0.0 :parameter/max 24.0
-                                    :parameter/default 0.0 :parameter/step 0.5}}}})
+                                :parameter/default 0.0 :parameter/step 0.5}}}})
+(def third-party-source-limit 65536)
+(defn plugin-descriptor [plugin]
+  (or (:plugin/descriptor plugin) (get plugin-types (:plugin/kind plugin))))
+(defn valid-plugin-parameter-descriptor? [descriptor]
+  (and (map? descriptor) (string? (:parameter/name descriptor))
+       (number? (:parameter/min descriptor)) (number? (:parameter/max descriptor))
+       (< (:parameter/min descriptor) (:parameter/max descriptor))
+       (number? (:parameter/default descriptor))
+       (<= (:parameter/min descriptor) (:parameter/default descriptor) (:parameter/max descriptor))
+       (number? (:parameter/step descriptor)) (pos? (:parameter/step descriptor))))
+(defn third-party-plugin-package-errors [package]
+  (let [descriptor (:package/descriptor package)
+        parameters (:plugin/parameters descriptor)]
+    (vec (concat
+          (when (or (not= 1 (:package/version package))
+                    (not (string? (:package/id package))) (not (re-matches #"[a-z0-9][a-z0-9._-]{0,63}" (:package/id package)))
+                    (not (string? (:plugin/name descriptor))) (empty? (:plugin/name descriptor))
+                    (not (string? (:plugin/processor descriptor))) (empty? (:plugin/processor descriptor))
+                    (not (map? parameters)) (empty? parameters) (> (count parameters) 32)
+                    (not (every? keyword? (keys parameters)))
+                    (not (every? valid-plugin-parameter-descriptor? (vals parameters))))
+            [[:invalid-plugin-manifest]])
+          (when (or (not (string? (:package/source package)))
+                    (empty? (:package/source package))
+                    (> (count (:package/source package)) third-party-source-limit))
+            [[:invalid-plugin-source]])))))
+(defn persisted-third-party-plugin-errors [plugin]
+  (third-party-plugin-package-errors
+   {:package/version (:plugin/package-version plugin)
+    :package/id (:plugin/package-id plugin)
+    :package/source (:plugin/source plugin)
+    :package/descriptor (:plugin/descriptor plugin)}))
 (defn plugin-parameter-defaults [plugin-kind]
   (into {} (map (fn [[parameter descriptor]] [parameter (:parameter/default descriptor)]))
         (get-in plugin-types [plugin-kind :plugin/parameters])))
@@ -180,6 +212,22 @@
              :plugin/mix-interpolation :linear :plugin/automation-mode :read
              :plugin/parameters (plugin-parameter-defaults plugin-kind)
              :plugin/automation {}})
+    p))
+(defn add-third-party-plugin [p plugin-id package]
+  (if (and (empty? (third-party-plugin-package-errors package))
+           (string? plugin-id) (not (empty? plugin-id))
+           (not (some #(= plugin-id (:plugin/id %)) (:project/plugins p))))
+    (let [descriptor (:package/descriptor package)]
+      (update p :project/plugins conj
+              {:plugin/id plugin-id :plugin/kind :third-party/audio-worklet :plugin/type :audio-worklet
+               :plugin/package-id (:package/id package) :plugin/package-version (:package/version package)
+               :plugin/processor (:plugin/processor descriptor) :plugin/descriptor descriptor
+               :plugin/source (:package/source package) :plugin/enabled? true :plugin/mix 1.0
+               :plugin/mix-automation [] :plugin/mix-interpolation :linear :plugin/automation-mode :read
+               :plugin/parameters (into {} (map (fn [[parameter parameter-descriptor]]
+                                                  [parameter (:parameter/default parameter-descriptor)]))
+                                                (:plugin/parameters descriptor))
+               :plugin/automation {}}))
     p))
 (defn set-plugin-enabled [p plugin-id enabled?]
   (update p :project/plugins
@@ -437,7 +485,7 @@
           #(mapv (fn [plugin]
                    (if (= plugin-id (:plugin/id plugin))
                      (if-let [{minimum :parameter/min maximum :parameter/max}
-                              (get-in plugin-types [(:plugin/kind plugin) :plugin/parameters parameter])]
+                              (get-in (plugin-descriptor plugin) [:plugin/parameters parameter])]
                        (assoc-in plugin [:plugin/parameters parameter] (max minimum (min maximum value))) plugin)
                      plugin)) %)))
 (defn set-plugin-automation [p plugin-id parameter points]
@@ -445,7 +493,7 @@
           #(mapv (fn [plugin]
                    (if (= plugin-id (:plugin/id plugin))
                      (if-let [{minimum :parameter/min maximum :parameter/max}
-                              (get-in plugin-types [(:plugin/kind plugin) :plugin/parameters parameter])]
+                              (get-in (plugin-descriptor plugin) [:plugin/parameters parameter])]
                        (assoc-in plugin [:plugin/automation parameter]
                                  (->> points
                                       (mapv (fn [{:keys [tick value]}]
@@ -563,11 +611,13 @@
                                       (clamp-effect-value parameter (:automation/value point)))) points))]
           [:invalid-effect-automation parameter])
         (for [plugin (:project/plugins p)
-              :let [descriptor (get plugin-types (:plugin/kind plugin))]
+              :let [descriptor (plugin-descriptor plugin)
+                    third-party? (= :third-party/audio-worklet (:plugin/kind plugin))]
               :when (or (not (string? (:plugin/id plugin))) (empty? (:plugin/id plugin))
                         (nil? descriptor)
                         (not= :audio-worklet (:plugin/type plugin))
                         (not= (:plugin/processor descriptor) (:plugin/processor plugin))
+                        (and third-party? (seq (persisted-third-party-plugin-errors plugin)))
                         (not (boolean? (:plugin/enabled? plugin)))
                         (let [mix-value (or (:plugin/mix plugin) 1.0)]
                           (not (and (number? mix-value) (<= 0 mix-value 1))))
