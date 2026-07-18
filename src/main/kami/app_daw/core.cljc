@@ -155,6 +155,7 @@
             {:plugin/id plugin-id :plugin/kind plugin-kind :plugin/type :audio-worklet
              :plugin/processor (get-in plugin-types [plugin-kind :plugin/processor])
              :plugin/enabled? true :plugin/mix 1.0 :plugin/mix-automation []
+             :plugin/mix-interpolation :linear
              :plugin/parameters (plugin-parameter-defaults plugin-kind)
              :plugin/automation {}})
     p))
@@ -185,6 +186,12 @@
                                           :automation/value (max 0.0 (min 1.0 value))}))
                                  (sort-by :automation/tick) vec))
                      plugin)) %)))
+(defn set-plugin-mix-interpolation [p plugin-id interpolation]
+  (if (contains? #{:linear :step} interpolation)
+    (update p :project/plugins
+            #(mapv (fn [plugin] (if (= plugin-id (:plugin/id plugin))
+                                  (assoc plugin :plugin/mix-interpolation interpolation) plugin)) %))
+    p))
 (defn set-plugin-parameter [p plugin-id parameter value]
   (update p :project/plugins
           #(mapv (fn [plugin]
@@ -329,6 +336,7 @@
                                (or (not (apply <= (map :automation/tick points)))
                                    (some #(or (neg? (:automation/tick %))
                                               (not (<= 0 (:automation/value %) 1))) points))))
+                        (not (contains? #{nil :linear :step} (:plugin/mix-interpolation plugin)))
                         (not= (set (keys (:plugin/parameters descriptor)))
                               (set (keys (:plugin/parameters plugin))))
                         (some (fn [[parameter points]]
