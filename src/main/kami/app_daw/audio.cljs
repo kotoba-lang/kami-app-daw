@@ -15,14 +15,24 @@
 (defn- connect-chain! [ctx destination cutoff delay-seconds]
   (let [filter (.createBiquadFilter ctx)
         delay (.createDelay ctx 1.0)
-        feedback (.createGain ctx)]
+        feedback (.createGain ctx)
+        analyser (.createAnalyser ctx)]
     (set! (.-type filter) "lowpass")
     (set! (.. filter -frequency -value) cutoff)
     (set! (.. delay -delayTime -value) delay-seconds)
     (set! (.. feedback -gain -value) (if (pos? delay-seconds) 0.28 0))
     (.connect filter delay) (.connect delay feedback) (.connect feedback delay)
-    (.connect filter destination) (.connect delay destination)
-    {:input filter}))
+    (set! (.-fftSize analyser) 512)
+    (.connect filter analyser) (.connect delay analyser) (.connect analyser destination)
+    {:input filter :analyser analyser}))
+
+(defn meter-db []
+  (if-let [analyser (:analyser @runtime)]
+    (let [samples (js/Float32Array. (.-fftSize analyser))]
+      (.getFloatTimeDomainData analyser samples)
+      (let [sum (reduce (fn [acc x] (+ acc (* x x))) 0 (array-seq samples)) rms (js/Math.sqrt (/ sum (.-length samples)))]
+        (if (pos? rms) (* 20 (/ (js/Math.log rms) (js/Math.log 10))) -96)))
+    -96))
 
 (defn decode-file! [file on-ready]
   (let [ctx (audio-context)]
@@ -46,17 +56,21 @@
             source (if buffer (.createBufferSource ctx) (.createOscillator ctx)) gain (.createGain ctx)
             begin (+ start (daw/tick->seconds project (:clip/start-tick clip)))
             duration (daw/tick->seconds project (:clip/length-ticks clip))
+            offset (or (:clip/source-offset-sec clip) 0)
+            actual-duration (if buffer (min duration (max 0 (- (.-duration buffer) offset))) duration)
+            fade-in (min actual-duration (or (:clip/fade-in-sec clip) 0.02))
+            fade-out (min (- actual-duration fade-in) (or (:clip/fade-out-sec clip) 0.05))
             level (* 0.16 (or (:track/gain track) 1))]
         (if buffer (set! (.-buffer source) buffer)
             (do (set! (.-type source) (if (= "drums" (:track/id track)) "square" "sine"))
                 (set! (.. source -frequency -value) (get frequencies (:track/id track) 220))))
         (.setValueAtTime (.-gain gain) 0 begin)
-        (.linearRampToValueAtTime (.-gain gain) level (+ begin 0.02))
-        (.setValueAtTime (.-gain gain) level (+ begin (max 0.03 (- duration 0.05))))
-        (.linearRampToValueAtTime (.-gain gain) 0 (+ begin duration))
+        (.linearRampToValueAtTime (.-gain gain) level (+ begin fade-in))
+        (.setValueAtTime (.-gain gain) level (+ begin (max fade-in (- actual-duration fade-out))))
+        (.linearRampToValueAtTime (.-gain gain) 0 (+ begin actual-duration))
         (.connect source gain) (.connect gain destination)
-        (if buffer (.start source begin 0 (min duration (.-duration buffer))) (.start source begin))
-        (.stop source (+ begin (if buffer (min duration (.-duration buffer)) duration)))))
+        (if buffer (.start source begin offset actual-duration) (.start source begin))
+        (.stop source (+ begin actual-duration))))
     start))
 
 (defn play! [project buffers {:keys [cutoff delay]}]
@@ -65,7 +79,7 @@
         chain (connect-chain! ctx (.-destination ctx) cutoff delay)
         start (schedule! ctx (:input chain) project buffers)]
     (.resume ctx)
-    (reset! runtime {:context ctx :started start})
+    (reset! runtime {:context ctx :started start :analyser (:analyser chain)})
     ctx))
 
 (defn- write-string! [view offset value]
