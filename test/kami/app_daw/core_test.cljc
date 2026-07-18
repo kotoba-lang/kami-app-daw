@@ -231,6 +231,14 @@
     (is (= [176 64 48] (first time)))
     (is (= [176 73 48] (last time)))
     (is (= (mapv int "0600012200") (mapv last time)))))
+(deftest mackie-hardware-profiles-detect-and-bound-capabilities
+  (is (= :behringer-x-touch (daw/detect-mackie-hardware-profile ["X-TOUCH INT"])))
+  (is (= :icon-platform-m-plus (daw/detect-mackie-hardware-profile ["Platform M+ V2"])))
+  (is (= :mackie-control (daw/detect-mackie-hardware-profile ["Mackie Control USB"])))
+  (is (= :generic-mcu (daw/detect-mackie-hardware-profile ["Unknown MIDI"])))
+  (is (= 8 (:profile/bank-size (daw/mackie-hardware-profile :unknown))))
+  (is (= [240 0 0 102 20 18 0]
+         (subvec (daw/mackie-scribble-message [{:track/name "A"}] 0 :behringer-x-touch) 0 7))))
 (deftest project-authoritative-bus-automation
   (let [automated (daw/set-bus-gain-automation p "master" [{:tick 960 :gain 0.25} {:tick 0 :gain 1.0}])]
     (is (= [{:automation/tick 0 :automation/gain 1.0} {:automation/tick 960 :automation/gain 0.25}]
