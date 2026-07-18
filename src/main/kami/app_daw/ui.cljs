@@ -8,7 +8,7 @@
                    :track/clips [{:clip/id "chords" :clip/name "Chords" :clip/start-tick 960 :clip/length-ticks 2880}]}
                   {:track/id "voice" :track/name "Voice" :track/color "#c4b5fd" :track/gain 0.9
                    :track/clips [{:clip/id "hook" :clip/name "Hook" :clip/start-tick 2400 :clip/length-ticks 1440}]}]}))
-(defonce state (r/atom {:project sample :history daw/empty-history :history-replaying? false :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :stem-exporting nil :directory-searching? false :directory-result nil :recording nil :recording-loop nil :recording-cancelled? false :input-monitoring? false :input-monitor-active? false :input-monitor-gain 0.35 :input-monitor-db -96 :recording-error nil :project-error nil :recovered? false :punch-length-ticks 960 :loop-takes 3 :buffers {} :assets {}}))
+(defonce state (r/atom {:project sample :history daw/empty-history :history-replaying? false :clip-drag nil :clip-preview nil :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :stem-exporting nil :directory-searching? false :directory-result nil :recording nil :recording-loop nil :recording-cancelled? false :input-monitoring? false :input-monitor-active? false :input-monitor-gain 0.35 :input-monitor-db -96 :recording-error nil :project-error nil :recovered? false :punch-length-ticks 960 :loop-takes 3 :buffers {} :assets {}}))
 (defonce meter-timer (atom nil))
 (defonce input-monitor-timer (atom nil))
 (defonce recorder-runtime (atom nil))
@@ -327,6 +327,46 @@
                                    {:tick endpoint :gain gain}
                                    {:tick (:automation/tick point) :gain (:automation/gain point)})) current)]
     (swap! state update :project daw/set-gain-automation (:track/id track) points)))
+(declare move-clip-drag! finish-clip-drag! cancel-clip-drag!)
+(defn remove-clip-drag-listeners! []
+  (.removeEventListener js/window "pointermove" move-clip-drag!)
+  (.removeEventListener js/window "pointerup" finish-clip-drag!)
+  (.removeEventListener js/window "pointercancel" cancel-clip-drag!))
+(defn start-clip-drag! [event clip total]
+  (when (= 0 (.-button event))
+    (.preventDefault event)
+    (let [lane (.closest (.-currentTarget event) ".lane") rect (.getBoundingClientRect lane)]
+      (.addEventListener js/window "pointermove" move-clip-drag!)
+      (.addEventListener js/window "pointerup" finish-clip-drag!)
+      (.addEventListener js/window "pointercancel" cancel-clip-drag!)
+      (swap! state assoc :selected (:clip/id clip) :tick (:clip/start-tick clip) :clip-preview (:project @state)
+             :clip-drag {:pointer-id (.-pointerId event) :clip-id (:clip/id clip) :origin-x (.-clientX event)
+                         :lane-width (.-width rect) :total total :origin-tick (:clip/start-tick clip)
+                         :base-project (:project @state)}))))
+(defn move-clip-drag! [event]
+  (when-let [{:keys [pointer-id clip-id origin-x lane-width total origin-tick base-project]} (:clip-drag @state)]
+    (when (= pointer-id (.-pointerId event))
+      (.preventDefault event)
+      (let [delta (js/Math.round (* (/ (- (.-clientX event) origin-x) lane-width) total))
+            tick (max 0 (+ origin-tick delta))]
+        (swap! state assoc :clip-preview (daw/move-clip base-project clip-id tick) :tick tick)))))
+(defn finish-clip-drag! [event]
+  (when (= (.-pointerId event) (get-in @state [:clip-drag :pointer-id]))
+    (.preventDefault event)
+    (let [preview (:clip-preview @state)]
+      (remove-clip-drag-listeners!)
+      (swap! state assoc :project preview :clip-preview nil :clip-drag nil))))
+(defn cancel-clip-drag! [event]
+  (when (= (.-pointerId event) (get-in @state [:clip-drag :pointer-id]))
+    (remove-clip-drag-listeners!)
+    (swap! state assoc :clip-preview nil :clip-drag nil :tick (get-in @state [:clip-drag :origin-tick]))))
+(defn key-move-clip! [event clip]
+  (when-let [direction ({"ArrowLeft" -1 "ArrowRight" 1} (.-key event))]
+    (.preventDefault event) (.stopPropagation event)
+    (let [step (if (.-shiftKey event) 480 120)
+          tick (max 0 (+ (:clip/start-tick clip) (* direction step)))]
+      (swap! state assoc :selected (:clip/id clip) :tick tick)
+      (swap! state update :project daw/move-clip (:clip/id clip) tick))))
 (defn track-row [track total]
   (let [asset-id (get-in track [:track/clips 0 :clip/asset-id]) asset (get-in @state [:assets asset-id])]
   [:div.track-row [:div.track-head [:strong (:track/name track)]
@@ -367,7 +407,10 @@
     [:button.clip {:style {:left (str (* 100 (/ (:clip/start-tick clip) total)) "%")
                            :width (str (* 100 (/ (:clip/length-ticks clip) total)) "%")
                            :background (:track/color track)}
-                   :on-click #(swap! state assoc :tick (:clip/start-tick clip) :selected (:clip/id clip))} (:clip/name clip)])]]))
+                   :aria-label (str "Move " (:clip/name clip)) :aria-keyshortcuts "ArrowLeft ArrowRight Shift+ArrowLeft Shift+ArrowRight"
+                   :on-pointer-down #(start-clip-drag! % clip total)
+                   :on-key-down #(key-move-clip! % clip)
+                   :on-click #(swap! state assoc :selected (:clip/id clip))} (:clip/name clip)])]]))
 (defn selected-clip [project id] (some #(when (= id (:clip/id %)) %) (mapcat :track/clips (:project/tracks project))))
 (defn edit-selected! [k value]
   (let [id (:selected @state) clip (selected-clip (:project @state) id)
@@ -375,7 +418,7 @@
               :fade-in-sec (or (:clip/fade-in-sec clip) 0.02)
               :fade-out-sec (or (:clip/fade-out-sec clip) 0.05)}]
     (swap! state update :project daw/edit-clip id (assoc edit k value))))
-(defn app [] (let [{:keys [project playing? tick]} @state total (max 3840 (daw/duration-ticks project))
+(defn app [] (let [{:keys [playing? tick]} @state project (or (:clip-preview @state) (:project @state)) total (max 3840 (daw/duration-ticks project))
                     missing (daw/missing-asset-ids project (keys (:buffers @state)))]
  [:main [:header [:div [:small "KOTOBA-LANG / MUSIC"] [:h1 "KAMI DAW"]]
    [:div.transport [:button.primary {:on-click toggle-play!} (if playing? "■ Stop" "▶ Play audio")]
