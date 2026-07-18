@@ -10,10 +10,37 @@
                    :track/clips [{:clip/id "hook" :clip/name "Hook" :clip/start-tick 2400 :clip/length-ticks 1440}]}]}))
 (defonce state (r/atom {:project sample :history daw/empty-history :history-replaying? false :clip-drag nil :clip-preview nil :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :analyzing? false :loudness-report nil :normalize-export? true :target-lufs -14 :true-peak-ceiling-db -1 :stem-exporting nil :stem-bundle-exporting? false :directory-searching? false :directory-result nil :recording nil :recording-loop nil :recording-cancelled? false :input-monitoring? false :input-monitor-active? false :input-monitor-gain 0.35 :input-monitor-db -96 :recording-error nil :project-error nil :recovered? false :punch-length-ticks 960 :loop-takes 3 :buffers {} :assets {}}))
 (defonce meter-timer (atom nil))
+(defonce transport-timer (atom nil))
+(defonce transport-origin (atom nil))
 (defonce input-monitor-timer (atom nil))
 (defonce recorder-runtime (atom nil))
 (defonce shortcuts-installed? (atom false))
+(declare stop-meter!)
 (def recovery-key "kami-app-daw/recovery/v1")
+(defn stop-transport! []
+  (when @transport-timer (js/clearInterval @transport-timer))
+  (reset! transport-timer nil) (reset! transport-origin nil)
+  (swap! state assoc :mix-latched #{}))
+(defn transport-write! [tick]
+  (doseq [plugin (get-in @state [:project :project/plugins])
+          :let [mode (or (:plugin/automation-mode plugin) :read)
+                latched? (contains? (:mix-latched @state) (:plugin/id plugin))]
+          :when (or (= mode :write) (and (= mode :latch) latched?))]
+    (swap! state update :project daw/write-plugin-mix-automation (:plugin/id plugin) tick
+           (or (:plugin/mix plugin) 1.0) false latched?)))
+(defn start-transport! []
+  (stop-transport!)
+  (let [project (:project @state) start-tick (:tick @state) started (.now js/performance)]
+    (reset! transport-origin {:started started :start-tick start-tick})
+    (reset! transport-timer
+            (js/setInterval
+             #(let [elapsed (/ (- (.now js/performance) started) 1000)
+                    tick (+ start-tick (daw/seconds->ticks project elapsed))
+                    end (daw/duration-ticks project)]
+                (if (>= tick end)
+                  (do (audio/stop!) (stop-meter!) (stop-transport!)
+                      (swap! state assoc :playing? false :tick end))
+                  (do (swap! state assoc :tick tick) (transport-write! tick)))) 25))))
 (defn sha256-file! [file]
   (-> (.arrayBuffer file)
       (.then #(.digest (.-subtle js/crypto) "SHA-256" %))
@@ -158,9 +185,9 @@
     (record-loop-take! track-id comp-id (:tick @state) planned-sec 1 take-count)))
 (defn toggle-play! []
   (if (:playing? @state)
-    (do (audio/stop!) (stop-meter!) (swap! state assoc :playing? false))
+    (do (audio/stop!) (stop-meter!) (stop-transport!) (swap! state assoc :playing? false))
     (-> (audio/play! (:project @state) (:buffers @state) (select-keys @state [:cutoff :delay]))
-        (.then #(do (start-meter!) (swap! state assoc :playing? true :project-error nil)))
+        (.then #(do (start-meter!) (swap! state assoc :playing? true :project-error nil) (start-transport!)))
         (.catch #(swap! state assoc :playing? false :project-error (str "Playback failed: " (.-message %)))))))
 (defn export! []
   (swap! state assoc :exporting? true)
@@ -545,19 +572,25 @@
                                    :aria-label (str (:plugin/id plugin) " wet mix")
                                    :on-change #(swap! state update :project daw/set-plugin-mix (:plugin/id plugin)
                                                       (js/parseFloat (.. % -target -value)))}]]
-        [:label "Write" [:input {:type "checkbox"
-                                  :checked (contains? (:mix-writing @state) (:plugin/id plugin))
-                                  :aria-label (str (:plugin/id plugin) " write wet mix automation")
-                                  :on-change #(swap! state update :mix-writing
-                                                     (if (.. % -target -checked) conj disj) (:plugin/id plugin))}]]
+        [:label "Automation" [:select {:value (name (or (:plugin/automation-mode plugin) :read))
+                                        :aria-label (str (:plugin/id plugin) " automation mode")
+                                        :on-change #(let [mode (keyword (.. % -target -value))]
+                                                     (swap! state update :project daw/set-plugin-automation-mode
+                                                            (:plugin/id plugin) mode)
+                                                     (when (not= mode :latch)
+                                                       (swap! state update :mix-latched disj (:plugin/id plugin))))}
+                               (for [mode [:read :touch :latch :write]]
+                                 ^{:key mode} [:option {:value (name mode)} (name mode)])]]
         [:label "Gesture" [:input {:type "range" :min 0 :max 1 :step 0.01 :value mix-value
                                     :aria-label (str (:plugin/id plugin) " live wet mix gesture")
                                     :on-input #(let [value (js/parseFloat (.. % -target -value))]
                                                  (swap! state update :project daw/set-plugin-mix (:plugin/id plugin) value)
-                                                 (when (and (:playing? @state)
-                                                            (contains? (:mix-writing @state) (:plugin/id plugin)))
-                                                   (swap! state update :project daw/append-plugin-mix-automation-point
-                                                          (:plugin/id plugin) (:tick @state) value)))}]]
+                                                 (when (:playing? @state)
+                                                   (when (= :latch (or (:plugin/automation-mode plugin) :read))
+                                                     (swap! state update :mix-latched (fnil conj #{}) (:plugin/id plugin)))
+                                                   (swap! state update :project daw/write-plugin-mix-automation
+                                                          (:plugin/id plugin) (:tick @state) value true
+                                                          (contains? (:mix-latched @state) (:plugin/id plugin)))))}]]
         [:label "A→" [:input {:type "number" :min 0 :max 1 :step 0.05 :value mix-start
                                :aria-label (str (:plugin/id plugin) " wet mix automation start")
                                :on-change #(swap! state update :project daw/set-plugin-mix-automation (:plugin/id plugin)
