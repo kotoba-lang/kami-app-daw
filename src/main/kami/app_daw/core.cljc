@@ -269,6 +269,31 @@
 (defn mackie-motor-feedback? [touched-strips message]
   (not (and (= :fader (:mackie/action message))
             (contains? (or touched-strips #{}) (:mackie/strip message)))))
+(defn- character-code [character]
+  #?(:clj (int character) :cljs (.charCodeAt (str character) 0)))
+(defn- mackie-ascii [value width]
+  (let [ascii (->> (str value)
+                   (map #(let [code (character-code %)] (if (<= 0x20 code 0x7E) code 0x3F)))
+                   (take width) vec)]
+    (into ascii (repeat (- width (count ascii)) 0x20))))
+(defn mackie-scribble-message [tracks bank]
+  (let [window (take 8 (drop (max 0 (or bank 0)) tracks))
+        text (mapcat #(mackie-ascii (or (:track/name %) "") 7) window)
+        padded (into (vec text) (repeat (- 56 (count text)) (int \space)))]
+    (vec (concat [0xF0 0x00 0x00 0x66 0x14 0x12 0x00] padded [0xF7]))))
+(defn mackie-time-display-messages [p tick]
+  (let [ppq (max 1 (:project/ppq p)) tick (max 0 (long (or tick 0)))
+        bar (inc (quot tick (* ppq 4)))
+        within-bar (mod tick (* ppq 4))
+        beat (inc (quot within-bar ppq))
+        within-beat (mod within-bar ppq)
+        subdivision (inc (quot (* within-beat 4) ppq))
+        sub-tick (mod within-beat (max 1 (quot ppq 4)))
+        zero-pad (fn [width value]
+                   (let [value (str value)] (str (apply str (repeat (max 0 (- width (count value))) "0")) value)))
+        digits (str (zero-pad 3 (min 999 bar)) beat subdivision (zero-pad 5 (min 99999 sub-tick)))]
+    (mapv (fn [index digit] [0xB0 (+ 0x40 index) (character-code digit)])
+          (range 10) (reverse digits))))
 (defn apply-midi-cc [p channel cc midi-value tick]
   (if-let [mapping (midi-mapping-for p channel cc)]
     (let [value (/ (max 0 (min 127 (or midi-value 0))) 127.0)

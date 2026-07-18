@@ -15,6 +15,7 @@
 (defonce input-monitor-timer (atom nil))
 (defonce recorder-runtime (atom nil))
 (defonce midi-access-runtime (atom nil))
+(defonce mackie-time-slot (atom nil))
 (defonce shortcuts-installed? (atom false))
 (declare stop-meter! start-playback! stop-playback!)
 (def recovery-key "kami-app-daw/recovery/v1")
@@ -34,6 +35,22 @@
     (when-let [access @midi-access-runtime]
       (doseq [output (array-seq (js/Array.from (.values (or (.-outputs access) (js/Map.)))))]
         (.send output (clj->js feedback))))))
+(defn send-midi-bytes! [message]
+  (when-let [access @midi-access-runtime]
+    (doseq [output (array-seq (js/Array.from (.values (or (.-outputs access) (js/Map.)))))]
+      (.send output (clj->js message)))))
+(defn send-mackie-display! []
+  (let [snapshot @state project (:project snapshot)]
+    (when (:midi-sysex? snapshot)
+      (send-midi-bytes! (daw/mackie-scribble-message (:project/tracks project) (:mackie-bank snapshot))))
+    (doseq [message (daw/mackie-time-display-messages project (:tick snapshot))]
+      (send-midi-bytes! message))))
+(defn send-mackie-time! [tick]
+  (let [slot (long (quot (max 0 tick) (max 1 (quot (get-in @state [:project :project/ppq]) 10))))]
+    (when (not= slot @mackie-time-slot)
+      (reset! mackie-time-slot slot)
+      (doseq [message (daw/mackie-time-display-messages (:project @state) tick)]
+        (send-midi-bytes! message)))))
 (defn handle-midi-message! [event]
   (let [data (.-data event) status (aget data 0) data1 (aget data 1) data2 (aget data 2)
         command (bit-and status 0xF0) channel (inc (bit-and status 0x0F))]
@@ -49,7 +66,8 @@
           (let [bank (daw/mackie-bank-offset (:mackie-bank @state) (:mackie/delta mackie)
                                              (count (get-in @state [:project :project/tracks])))]
             (swap! state assoc :mackie-bank bank :mackie-touched-strips #{}
-                   :midi-last-message (str "Mackie bank " (inc (quot bank 8)))))
+                   :midi-last-message (str "Mackie bank " (inc (quot bank 8))))
+            (send-mackie-display!))
 
           :fader-touch
           (let [strip (:mackie/strip mackie) touched? (:mackie/touched? mackie)
@@ -95,14 +113,19 @@
          :midi-output-count (.-size (or (.-outputs access) (js/Map.)))))
 (defn connect-midi! []
   (if-let [request (.-requestMIDIAccess js/navigator)]
-    (-> (.call request js/navigator)
-        (.then (fn [access]
-                 (reset! midi-access-runtime access)
-                 (bind-midi-inputs! access)
-                 (set! (.-onstatechange access) #(bind-midi-inputs! access))
-                 (swap! state assoc :midi-status :connected :project-error nil)))
+    (let [connected! (fn [access]
+                       (reset! midi-access-runtime access)
+                       (bind-midi-inputs! access)
+                       (set! (.-onstatechange access) #(bind-midi-inputs! access))
+                       (swap! state assoc :midi-status :connected :midi-sysex? (true? (.-sysexEnabled access))
+                              :project-error nil)
+                       (reset! mackie-time-slot nil)
+                       (send-mackie-display!))]
+      (-> (.call request js/navigator #js {:sysex true})
+        (.catch #(.call request js/navigator #js {:sysex false}))
+        (.then connected!)
         (.catch #(swap! state assoc :midi-status :error
-                        :project-error (str "MIDI failed: " (.-message %)))))
+                        :project-error (str "MIDI failed: " (.-message %))))))
     (swap! state assoc :midi-status :unsupported :project-error "Web MIDI is not available")))
 (defn disconnect-midi! []
   (when-let [access @midi-access-runtime]
@@ -133,7 +156,7 @@
                 (if (>= tick end)
                   (do (audio/stop!) (stop-meter!) (stop-transport!)
                       (swap! state assoc :playing? false :tick end))
-                  (do (swap! state assoc :tick tick) (transport-write! tick)))) 25))))
+                  (do (swap! state assoc :tick tick) (send-mackie-time! tick) (transport-write! tick)))) 25))))
 (defn sha256-file! [file]
   (-> (.arrayBuffer file)
       (.then #(.digest (.-subtle js/crypto) "SHA-256" %))
