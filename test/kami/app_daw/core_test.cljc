@@ -131,8 +131,23 @@
                                                  [:project/plugins 0 :plugin/mix-automation]))))
     (is (= [360] (mapv :automation/tick (get-in (daw/write-plugin-mix-automation write "sat" 360 0.4 false false)
                                                  [:project/plugins 0 :plugin/mix-automation]))))
-    (is (= write (daw/set-plugin-automation-mode write "sat" :trim)))
+    (is (= :trim (get-in (daw/set-plugin-automation-mode write "sat" :trim)
+                         [:project/plugins 0 :plugin/automation-mode])))
     (is (empty? (daw/validate-project write)))))
+(deftest mix-automation-thinning-and-trim-preserve-authoritative-shape
+  (let [base (-> (daw/add-plugin p "sat" :kami/saturator)
+                 (daw/set-plugin-mix-automation "sat" [{:tick 0 :value 0.1}
+                                                        {:tick 240 :value 0.205}
+                                                        {:tick 480 :value 0.3}
+                                                        {:tick 960 :value 0.9}]))
+        thinned (daw/thin-plugin-mix-automation base "sat" 0.01)
+        trimmed (daw/trim-plugin-mix-automation thinned "sat" 0.2)]
+    (is (= [0 480 960] (mapv :automation/tick (get-in thinned [:project/plugins 0 :plugin/mix-automation]))))
+    (is (every? true? (map #(<= (Math/abs (- %1 %2)) 1.0e-9)
+                           [0.3 0.5 1.0]
+                           (map :automation/value (get-in trimmed [:project/plugins 0 :plugin/mix-automation])))))
+    (is (= base (daw/thin-plugin-mix-automation base "sat" -0.1)))
+    (is (empty? (daw/validate-project trimmed)))))
 (deftest project-authoritative-bus-automation
   (let [automated (daw/set-bus-gain-automation p "master" [{:tick 960 :gain 0.25} {:tick 0 :gain 1.0}])]
     (is (= [{:automation/tick 0 :automation/gain 1.0} {:automation/tick 960 :automation/gain 0.25}]
