@@ -1,4 +1,4 @@
-(ns kami.app-daw.ui (:require [reagent.core :as r] [reagent.dom.client :as rdom]
+(ns kami.app-daw.ui (:require [reagent.core :as r] [reagent.dom.client :as rdom] [cljs.reader :as reader]
                               [kami.app-daw.core :as daw] [kami.app-daw.audio :as audio]))
 (def sample (daw/project {:project/id "demo-song" :project/name "夜明けの波形"
  :project/tracks [{:track/id "drums" :track/name "Drums" :track/color "#ff8a65" :track/gain 0.82
@@ -7,7 +7,7 @@
                    :track/clips [{:clip/id "chords" :clip/name "Chords" :clip/start-tick 960 :clip/length-ticks 2880}]}
                   {:track/id "voice" :track/name "Voice" :track/color "#c4b5fd" :track/gain 0.9
                    :track/clips [{:clip/id "hook" :clip/name "Hook" :clip/start-tick 2400 :clip/length-ticks 1440}]}]}))
-(defonce state (r/atom {:project sample :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :stem-exporting nil :recording nil :recording-error nil :punch-length-ticks 960 :buffers {} :assets {}}))
+(defonce state (r/atom {:project sample :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :stem-exporting nil :recording nil :recording-error nil :project-error nil :punch-length-ticks 960 :buffers {} :assets {}}))
 (defonce meter-timer (atom nil))
 (defonce recorder-runtime (atom nil))
 (defn start-meter! []
@@ -70,6 +70,23 @@
   (swap! state assoc :stem-exporting track-id)
   (audio/export-track-wav! (:project @state) track-id (:buffers @state) (select-keys @state [:cutoff :delay])
                            #(swap! state assoc :stem-exporting nil)))
+(defn download-project! []
+  (let [blob (js/Blob. #js [(pr-str (:project @state))] #js {:type "application/edn"})
+        url (js/URL.createObjectURL blob) a (.createElement js/document "a")]
+    (set! (.-href a) url) (set! (.-download a) "kami-daw-project.edn") (.click a)
+    (js/setTimeout #(js/URL.revokeObjectURL url) 1000)))
+(defn load-project! [event]
+  (when-let [file (aget (.. event -target -files) 0)]
+    (-> (.text file)
+        (.then (fn [text]
+                 (try
+                   (if-let [project (daw/accept-project (reader/read-string text))]
+                     (let [first-clip (first (mapcat :track/clips (:project/tracks project)))]
+                       (audio/stop!) (stop-meter!)
+                       (swap! state assoc :project project :selected (:clip/id first-clip)
+                              :tick (or (:clip/start-tick first-clip) 0) :playing? false :project-error nil))
+                     (swap! state assoc :project-error "Unsupported or invalid DAW project"))
+                   (catch :default error (swap! state assoc :project-error (.-message error)))))))))
 (defn set-automation! [track endpoint gain]
   (let [end-tick (daw/duration-ticks (:project @state))
         current (or (:track/gain-automation track)
@@ -130,7 +147,10 @@
    [:label "Punch ticks" [:input {:type "number" :min 1 :step 120 :value (:punch-length-ticks @state) :aria-label "Punch length ticks"
                                    :on-change #(swap! state assoc :punch-length-ticks (max 1 (js/parseInt (.. % -target -value))))}]]
    [:button {:on-click export! :disabled (:exporting? @state)} (if (:exporting? @state) "Rendering…" "Export WAV")]
+   [:button {:on-click download-project!} "Save project EDN"]
+   [:label "Open project EDN" [:input {:type "file" :accept ".edn,application/edn" :aria-label "Open DAW project EDN" :on-change load-project!}]]
    [:button {:on-click #(js/navigator.clipboard.writeText (pr-str project))} "Copy EDN"]]
+  (when-let [error (:project-error @state)] [:section.meta [:strong (str "Project error: " error)]])
   (when-let [error (:recording-error @state)] [:section.meta [:strong (str "Recording error: " error)]])
   (when-let [clip (selected-clip project (:selected @state))]
     [:section.meta.clip-editor [:strong (str "Edit • " (:clip/name clip))]

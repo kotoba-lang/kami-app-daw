@@ -66,3 +66,5 @@
                         (neg? (or (:clip/source-offset-sec c) 0))
                         (neg? (or (:clip/fade-in-sec c) 0)) (neg? (or (:clip/fade-out-sec c) 0)))]
           [:invalid-clip (:clip/id c)]))))
+(defn accept-project [value]
+  (when (and (map? value) (empty? (validate-project value))) value))

@@ -28,3 +28,7 @@
 (deftest punch-range-uses-musical-time
   (is (= 1.0 (daw/punch-duration-seconds p 960)))
   (is (= 0 (daw/seconds->ticks p 0))))
+(deftest validated-project-persistence
+  (is (= p (daw/accept-project p)))
+  (is (nil? (daw/accept-project (assoc p :project/schema "foreign/v1"))))
+  (is (nil? (daw/accept-project [:not :a :project]))))
