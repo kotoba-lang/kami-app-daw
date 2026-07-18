@@ -14,6 +14,14 @@
     (is (= [0 960] (mapv :automation/tick (get-in automated [:project/tracks 0 :track/gain-automation]))))
     (is (= ["t"] (mapv :track/id (:project/tracks (daw/solo-track-project automated "t")))))
     (is (empty? (daw/validate-project automated)))))
+(deftest project-authoritative-bus-automation
+  (let [automated (daw/set-bus-gain-automation p "master" [{:tick 960 :gain 0.25} {:tick 0 :gain 1.0}])]
+    (is (= [{:automation/tick 0 :automation/gain 1.0} {:automation/tick 960 :automation/gain 0.25}]
+           (get-in automated [:project/buses 0 :bus/gain-automation])))
+    (is (empty? (daw/validate-project automated)))
+    (is (= [[:invalid-bus-automation-order "master"]]
+           (daw/validate-project (assoc-in automated [:project/buses 0 :bus/gain-automation]
+                                           [{:automation/tick 960 :automation/gain 1} {:automation/tick 0 :automation/gain 1}]))))))
 (deftest bus-routing
   (let [routed (daw/route-track p "t" "master" 0.35)]
     (is (= ["master" 0.35] ((juxt :track/bus-id :track/send) (get-in routed [:project/tracks 0]))))

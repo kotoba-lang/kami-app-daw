@@ -334,6 +334,15 @@
                                    {:tick endpoint :gain gain}
                                    {:tick (:automation/tick point) :gain (:automation/gain point)})) current)]
     (swap! state update :project daw/set-gain-automation (:track/id track) points)))
+(defn set-bus-automation! [bus endpoint gain]
+  (let [end-tick (daw/duration-ticks (:project @state))
+        current (or (:bus/gain-automation bus)
+                    [{:automation/tick 0 :automation/gain (or (:bus/gain bus) 1)}
+                     {:automation/tick end-tick :automation/gain (or (:bus/gain bus) 1)}])
+        points (mapv (fn [point] (if (= endpoint (:automation/tick point))
+                                   {:tick endpoint :gain gain}
+                                   {:tick (:automation/tick point) :gain (:automation/gain point)})) current)]
+    (swap! state update :project daw/set-bus-gain-automation (:bus/id bus) points)))
 (declare move-clip-drag! finish-clip-drag! cancel-clip-drag!)
 (defn remove-clip-drag-listeners! []
   (.removeEventListener js/window "pointermove" move-clip-drag!)
@@ -435,6 +444,18 @@
    [:label "Tempo" [:input {:type "number" :value (:project/bpm project) :on-change #(swap! state assoc-in [:project :project/bpm] (js/parseInt (.. % -target -value)))}]]
    [:label "Low-pass" [:input {:type "range" :min 300 :max 12000 :step 100 :value (:cutoff @state) :on-change #(swap! state assoc :cutoff (js/parseFloat (.. % -target -value)))}]]
    [:label "Delay" [:input {:type "range" :min 0 :max 0.5 :step 0.01 :value (:delay @state) :on-change #(swap! state assoc :delay (js/parseFloat (.. % -target -value)))}]]
+   (for [bus (:project/buses project)
+         :let [end-tick (daw/duration-ticks project) points (:bus/gain-automation bus)
+               start-gain (or (:automation/gain (first points)) (:bus/gain bus) 1)
+               end-gain (or (:automation/gain (last points)) (:bus/gain bus) 1)]]
+     ^{:key (:bus/id bus)}
+     [:span.bus-automation [:strong (str (:bus/name bus) " bus")]
+      [:label "A→" [:input {:type "number" :min 0 :max 2 :step 0.05 :value start-gain
+                              :aria-label (str (:bus/name bus) " bus automation start")
+                              :on-change #(set-bus-automation! bus 0 (js/parseFloat (.. % -target -value)))}]]
+      [:label "→B" [:input {:type "number" :min 0 :max 2 :step 0.05 :value end-gain
+                              :aria-label (str (:bus/name bus) " bus automation end")
+                              :on-change #(set-bus-automation! bus end-tick (js/parseFloat (.. % -target -value)))}]]])
    [:label "Punch ticks" [:input {:type "number" :min 1 :step 120 :value (:punch-length-ticks @state) :aria-label "Punch length ticks"
                                    :on-change #(swap! state assoc :punch-length-ticks (max 1 (js/parseInt (.. % -target -value))))}]]
    [:label "Loop takes" [:input {:type "number" :min 1 :max 8 :value (:loop-takes @state) :aria-label "Loop take count"
