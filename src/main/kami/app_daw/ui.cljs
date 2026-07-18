@@ -579,7 +579,7 @@
                                                             (:plugin/id plugin) mode)
                                                      (when (not= mode :latch)
                                                        (swap! state update :mix-latched disj (:plugin/id plugin))))}
-                               (for [mode [:read :touch :latch :write]]
+                               (for [mode [:read :touch :latch :write :trim]]
                                  ^{:key mode} [:option {:value (name mode)} (name mode)])]]
         [:label "Gesture" [:input {:type "range" :min 0 :max 1 :step 0.01 :value mix-value
                                     :aria-label (str (:plugin/id plugin) " live wet mix gesture")
@@ -591,6 +591,28 @@
                                                    (swap! state update :project daw/write-plugin-mix-automation
                                                           (:plugin/id plugin) (:tick @state) value true
                                                           (contains? (:mix-latched @state) (:plugin/id plugin)))))}]]
+        (when (= :trim (or (:plugin/automation-mode plugin) :read))
+          [:span
+           [:label "Trim delta" [:input {:type "number" :min -1 :max 1 :step 0.01
+                                          :value (get-in @state [:mix-trim-deltas (:plugin/id plugin)] 0)
+                                          :aria-label (str (:plugin/id plugin) " automation trim delta")
+                                          :on-change #(swap! state assoc-in [:mix-trim-deltas (:plugin/id plugin)]
+                                                             (js/parseFloat (.. % -target -value)))}]]
+           [:button {:aria-label (str "Apply trim to " (:plugin/id plugin))
+                     :on-click #(swap! state update :project daw/trim-plugin-mix-automation
+                                       (:plugin/id plugin)
+                                       (get-in @state [:mix-trim-deltas (:plugin/id plugin)] 0))}
+            "Apply trim"]])
+        [:label "Thin tolerance" [:input {:type "number" :min 0 :max 1 :step 0.001
+                                           :value (get-in @state [:mix-thin-tolerances (:plugin/id plugin)] 0.01)
+                                           :aria-label (str (:plugin/id plugin) " automation thin tolerance")
+                                           :on-change #(swap! state assoc-in [:mix-thin-tolerances (:plugin/id plugin)]
+                                                              (js/parseFloat (.. % -target -value)))}]]
+        [:button {:aria-label (str "Thin automation for " (:plugin/id plugin))
+                  :on-click #(swap! state update :project daw/thin-plugin-mix-automation
+                                    (:plugin/id plugin)
+                                    (get-in @state [:mix-thin-tolerances (:plugin/id plugin)] 0.01))}
+         "Thin"]
         [:label "A→" [:input {:type "number" :min 0 :max 1 :step 0.05 :value mix-start
                                :aria-label (str (:plugin/id plugin) " wet mix automation start")
                                :on-change #(swap! state update :project daw/set-plugin-mix-automation (:plugin/id plugin)

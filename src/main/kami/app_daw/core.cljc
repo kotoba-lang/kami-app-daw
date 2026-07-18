@@ -203,7 +203,7 @@
             #(mapv (fn [plugin] (if (= plugin-id (:plugin/id plugin))
                                   (assoc plugin :plugin/mix-interpolation interpolation) plugin)) %))
     p))
-(def automation-modes #{:read :touch :latch :write})
+(def automation-modes #{:read :touch :latch :write :trim})
 (defn set-plugin-automation-mode [p plugin-id mode]
   (if (contains? automation-modes mode)
     (update p :project/plugins
@@ -215,6 +215,59 @@
     (let [mode (or (:plugin/automation-mode plugin) :read)
           writable? (case mode :touch gesture? :latch (or gesture? latched?) :write true false)]
       (if writable? (append-plugin-mix-automation-point p plugin-id tick value) p))
+    p))
+(defn trim-plugin-mix-automation [p plugin-id delta]
+  (if (number? delta)
+    (update p :project/plugins
+            #(mapv (fn [plugin]
+                     (if (= plugin-id (:plugin/id plugin))
+                       (update plugin :plugin/mix-automation
+                               (fn [points] (mapv (fn [point]
+                                                   (update point :automation/value
+                                                           (fn [value] (max 0.0 (min 1.0 (+ value delta)))))) points)))
+                       plugin)) %))
+    p))
+(defn- linear-value-between [left right tick]
+  (let [span (- (:automation/tick right) (:automation/tick left))]
+    (if (zero? span) (:automation/value right)
+        (+ (:automation/value left)
+           (* (/ (- tick (:automation/tick left)) span)
+              (- (:automation/value right) (:automation/value left)))))))
+(defn- thin-linear-points [points tolerance]
+  (if (<= (count points) 2) points
+      (let [left (first points) right (last points)
+            candidates (map-indexed
+                        (fn [index point]
+                          [(inc index) (Math/abs (- (:automation/value point)
+                                                  (linear-value-between left right (:automation/tick point))))])
+                        (butlast (rest points)))
+            [split deviation] (apply max-key second candidates)]
+        (if (> deviation tolerance)
+          (vec (concat (butlast (thin-linear-points (subvec points 0 (inc split)) tolerance))
+                       (thin-linear-points (subvec points split) tolerance)))
+          [left right]))))
+(defn- thin-step-points [points tolerance]
+  (if (<= (count points) 2) points
+      (let [last-point (last points)]
+        (->> (butlast points)
+             (reduce (fn [kept point]
+                       (if (and (seq kept)
+                                (<= (Math/abs (- (:automation/value point)
+                                                 (:automation/value (last kept)))) tolerance))
+                         kept (conj kept point))) [])
+             (#(if (= (:automation/tick (last %)) (:automation/tick last-point)) %
+                   (conj % last-point))) vec))))
+(defn thin-plugin-mix-automation [p plugin-id tolerance]
+  (if (and (number? tolerance) (<= 0 tolerance 1))
+    (update p :project/plugins
+            #(mapv (fn [plugin]
+                     (if (= plugin-id (:plugin/id plugin))
+                       (update plugin :plugin/mix-automation
+                               (fn [points]
+                                 ((if (= :step (:plugin/mix-interpolation plugin))
+                                    thin-step-points thin-linear-points)
+                                  (vec points) tolerance)))
+                       plugin)) %))
     p))
 (defn set-plugin-parameter [p plugin-id parameter value]
   (update p :project/plugins
