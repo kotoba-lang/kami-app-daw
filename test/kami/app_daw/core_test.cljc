@@ -217,6 +217,20 @@
     (is (false? (daw/mackie-motor-feedback? #{8} fader)))
     (is (true? (daw/mackie-motor-feedback? #{} fader)))
     (is (true? (daw/mackie-motor-feedback? #{9} fader)))))
+(deftest mackie-scribble-strip-and-time-display
+  (let [message (daw/mackie-scribble-message [{:track/name "Drums"} {:track/name "日本語Voice"}] 0)
+        banked (daw/mackie-scribble-message (mapv #(hash-map :track/name (str "Track" %)) (range 10)) 8)
+        time (daw/mackie-time-display-messages p 2460)]
+    (is (= 64 (count message)))
+    (is (= [240 0 0 102 20 18 0] (subvec message 0 7)))
+    (is (= (mapv int "Drums  ") (subvec message 7 14)))
+    (is (= (mapv int "???Voic") (subvec message 14 21)))
+    (is (= 247 (last message)))
+    (is (= (mapv int "Track8 ") (subvec banked 7 14)))
+    (is (= 10 (count time)))
+    (is (= [176 64 48] (first time)))
+    (is (= [176 73 48] (last time)))
+    (is (= (mapv int "0600012200") (mapv last time)))))
 (deftest project-authoritative-bus-automation
   (let [automated (daw/set-bus-gain-automation p "master" [{:tick 960 :gain 0.25} {:tick 0 :gain 1.0}])]
     (is (= [{:automation/tick 0 :automation/gain 1.0} {:automation/tick 960 :automation/gain 0.25}]
