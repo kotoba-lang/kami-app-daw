@@ -29,7 +29,7 @@
         (when-not (pos-int? (:project/ppq p)) [:invalid-ppq])
         (when-not (and (number? (:project/bpm p)) (pos? (:project/bpm p))) [:invalid-bpm])
         (for [c (mapcat :track/clips (:project/tracks p))
-              :when (or (neg? (:clip/start-tick c)) (not (pos-int? (:clip/length-ticks c))
+              :when (or (neg? (:clip/start-tick c)) (not (pos-int? (:clip/length-ticks c)))
                         (neg? (or (:clip/source-offset-sec c) 0))
                         (neg? (or (:clip/fade-in-sec c) 0)) (neg? (or (:clip/fade-out-sec c) 0)))]
           [:invalid-clip (:clip/id c)]))))
