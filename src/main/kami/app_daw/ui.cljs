@@ -7,7 +7,7 @@
                    :track/clips [{:clip/id "chords" :clip/name "Chords" :clip/start-tick 960 :clip/length-ticks 2880}]}
                   {:track/id "voice" :track/name "Voice" :track/color "#c4b5fd" :track/gain 0.9
                    :track/clips [{:clip/id "hook" :clip/name "Hook" :clip/start-tick 2400 :clip/length-ticks 1440}]}]}))
-(defonce state (r/atom {:project sample :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :buffers {} :assets {}}))
+(defonce state (r/atom {:project sample :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :stem-exporting nil :buffers {} :assets {}}))
 (defonce meter-timer (atom nil))
 (defn start-meter! []
   (when @meter-timer (js/clearInterval @meter-timer))
@@ -34,6 +34,19 @@
   (swap! state assoc :exporting? true)
   (audio/export-wav! (:project @state) (:buffers @state) (select-keys @state [:cutoff :delay])
                      #(swap! state assoc :exporting? false)))
+(defn export-stem! [track-id]
+  (swap! state assoc :stem-exporting track-id)
+  (audio/export-track-wav! (:project @state) track-id (:buffers @state) (select-keys @state [:cutoff :delay])
+                           #(swap! state assoc :stem-exporting nil)))
+(defn set-automation! [track endpoint gain]
+  (let [end-tick (daw/duration-ticks (:project @state))
+        current (or (:track/gain-automation track)
+                    [{:automation/tick 0 :automation/gain (or (:track/gain track) 1)}
+                     {:automation/tick end-tick :automation/gain (or (:track/gain track) 1)}])
+        points (mapv (fn [point] (if (= endpoint (:automation/tick point))
+                                   {:tick endpoint :gain gain}
+                                   {:tick (:automation/tick point) :gain (:automation/gain point)})) current)]
+    (swap! state update :project daw/set-gain-automation (:track/id track) points)))
 (defn track-row [track total]
   (let [asset-id (get-in track [:track/clips 0 :clip/asset-id]) asset (get-in @state [:assets asset-id])]
   [:div.track-row [:div.track-head [:strong (:track/name track)]
@@ -41,6 +54,14 @@
      [:button {:on-click #(swap! state update :project daw/set-track (:track/id track) :track/solo? (not (:track/solo? track)))} (if (:track/solo? track) "S ✓" "S")]]
     [:input {:type "file" :accept "audio/*" :aria-label (str "Import " (:track/name track) " audio") :on-change #(import-track! track %)}]
     (when asset [:small (:name asset)])
+    (let [end-tick (daw/duration-ticks (:project @state)) points (:track/gain-automation track)
+          start-gain (or (:automation/gain (first points)) (:track/gain track) 1)
+          end-gain (or (:automation/gain (last points)) (:track/gain track) 1)]
+      [:div.buttons
+       [:label "A→" [:input {:type "number" :min 0 :max 2 :step .05 :value start-gain :aria-label (str (:track/name track) " automation start") :on-change #(set-automation! track 0 (js/parseFloat (.. % -target -value)))}]]
+       [:label "→B" [:input {:type "number" :min 0 :max 2 :step .05 :value end-gain :aria-label (str (:track/name track) " automation end") :on-change #(set-automation! track end-tick (js/parseFloat (.. % -target -value)))}]]])
+    [:button {:on-click #(export-stem! (:track/id track)) :disabled (= (:track/id track) (:stem-exporting @state))}
+     (if (= (:track/id track) (:stem-exporting @state)) "Rendering stem…" "Export stem")]
     [:input {:type "range" :min 0 :max 1 :step .01 :value (:track/gain track)
              :aria-label (str (:track/name track) " gain")
              :on-change #(swap! state update :project daw/set-track (:track/id track) :track/gain (js/parseFloat (.. % -target -value)))}]]

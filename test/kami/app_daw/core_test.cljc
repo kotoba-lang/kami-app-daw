@@ -8,3 +8,8 @@
         clip (get-in edited [:project/tracks 0 :track/clips 0])]
     (is (= [0.25 0.1 0.2] ((juxt :clip/source-offset-sec :clip/fade-in-sec :clip/fade-out-sec) clip)))
     (is (empty? (daw/validate-project edited)))))
+(deftest automation-and-stem
+  (let [automated (daw/set-gain-automation p "t" [{:tick 960 :gain 0.2} {:tick 0 :gain 1.0}])]
+    (is (= [0 960] (mapv :automation/tick (get-in automated [:project/tracks 0 :track/gain-automation]))))
+    (is (= ["t"] (mapv :track/id (:project/tracks (daw/solo-track-project automated "t")))))
+    (is (empty? (daw/validate-project automated)))))

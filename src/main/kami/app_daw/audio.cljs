@@ -53,14 +53,14 @@
             :when (not (:track/mute? track))
             clip (:track/clips track)]
       (let [buffer (get buffers (:clip/asset-id clip))
-            source (if buffer (.createBufferSource ctx) (.createOscillator ctx)) gain (.createGain ctx)
+            source (if buffer (.createBufferSource ctx) (.createOscillator ctx)) gain (.createGain ctx) track-gain (.createGain ctx)
             begin (+ start (daw/tick->seconds project (:clip/start-tick clip)))
             duration (daw/tick->seconds project (:clip/length-ticks clip))
             offset (or (:clip/source-offset-sec clip) 0)
             actual-duration (if buffer (min duration (max 0 (- (.-duration buffer) offset))) duration)
             fade-in (min actual-duration (or (:clip/fade-in-sec clip) 0.02))
             fade-out (min (- actual-duration fade-in) (or (:clip/fade-out-sec clip) 0.05))
-            level (* 0.16 (or (:track/gain track) 1))]
+            level 0.16]
         (if buffer (set! (.-buffer source) buffer)
             (do (set! (.-type source) (if (= "drums" (:track/id track)) "square" "sine"))
                 (set! (.. source -frequency -value) (get frequencies (:track/id track) 220))))
@@ -68,7 +68,11 @@
         (.linearRampToValueAtTime (.-gain gain) level (+ begin fade-in))
         (.setValueAtTime (.-gain gain) level (+ begin (max fade-in (- actual-duration fade-out))))
         (.linearRampToValueAtTime (.-gain gain) 0 (+ begin actual-duration))
-        (.connect source gain) (.connect gain destination)
+        (set! (.. track-gain -gain -value) (or (:track/gain track) 1))
+        (doseq [point (:track/gain-automation track)]
+          (.linearRampToValueAtTime (.-gain track-gain) (:automation/gain point)
+                                    (+ start (daw/tick->seconds project (:automation/tick point)))))
+        (.connect source gain) (.connect gain track-gain) (.connect track-gain destination)
         (if buffer (.start source begin offset actual-duration) (.start source begin))
         (.stop source (+ begin actual-duration))))
     start))
@@ -109,3 +113,15 @@
                    (set! (.-href a) url) (set! (.-download a) "kami-daw-master.wav") (.click a)
                    (js/setTimeout #(js/URL.revokeObjectURL url) 1000)
                    (on-done)))))))
+
+(defn export-track-wav! [project track-id buffers effects on-done]
+  (let [stem (daw/solo-track-project project track-id)]
+    (let [seconds (+ 1 (daw/tick->seconds stem (daw/duration-ticks stem)))
+          ctx (js/OfflineAudioContext. 1 (js/Math.ceil (* 44100 seconds)) 44100)
+          chain (connect-chain! ctx (.-destination ctx) (:cutoff effects) (:delay effects))]
+      (schedule! ctx (:input chain) stem buffers)
+      (-> (.startRendering ctx)
+          (.then (fn [buffer]
+                   (let [url (js/URL.createObjectURL (wav-blob buffer)) a (.createElement js/document "a")]
+                     (set! (.-href a) url) (set! (.-download a) (str "kami-daw-stem-" track-id ".wav")) (.click a)
+                     (js/setTimeout #(js/URL.revokeObjectURL url) 1000) (on-done))))))))

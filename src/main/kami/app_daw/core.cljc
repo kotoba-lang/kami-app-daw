@@ -23,11 +23,23 @@
                #(assoc % :clip/source-offset-sec (max 0 (or source-offset-sec 0))
                          :clip/fade-in-sec (max 0 (or fade-in-sec 0))
                          :clip/fade-out-sec (max 0 (or fade-out-sec 0)))))
+(defn set-gain-automation [p track-id points]
+  (set-track p track-id :track/gain-automation
+             (->> points (mapv (fn [{:keys [tick gain]}]
+                                 {:automation/tick (max 0 tick) :automation/gain (max 0 gain)}))
+                  (sort-by :automation/tick) vec)))
+(defn solo-track-project [p track-id]
+  (update p :project/tracks #(vec (filter (fn [track] (= track-id (:track/id track))) %))))
 (defn validate-project [p]
   (vec (concat
         (when-not (= schema (:project/schema p)) [:unsupported-schema])
         (when-not (pos-int? (:project/ppq p)) [:invalid-ppq])
         (when-not (and (number? (:project/bpm p)) (pos? (:project/bpm p))) [:invalid-bpm])
+        (for [track (:project/tracks p)
+              :let [points (:track/gain-automation track)]
+              :when (and (seq points)
+                         (not (apply <= (map :automation/tick points))))]
+          [:invalid-automation-order (:track/id track)])
         (for [c (mapcat :track/clips (:project/tracks p))
               :when (or (neg? (:clip/start-tick c)) (not (pos-int? (:clip/length-ticks c)))
                         (neg? (or (:clip/source-offset-sec c) 0))
