@@ -235,14 +235,25 @@
                               (js/setTimeout #(js/URL.revokeObjectURL url) 1000)
                               (on-done result)))))))))
 
-(defn export-track-wav! [project track-id buffers effects on-done]
+(defn render-track-wav! [project track-id buffers effects]
   (let [stem (daw/solo-track-project project track-id)]
-    (let [seconds (+ 1 (daw/tick->seconds stem (daw/duration-ticks stem)))
+    (let [seconds (+ 1 (daw/tick->seconds project (daw/duration-ticks project)))
           ctx (js/OfflineAudioContext. 1 (js/Math.ceil (* 44100 seconds)) 44100)
           chain (connect-chain! ctx (.-destination ctx) stem effects)]
       (schedule! ctx (:input chain) stem buffers)
-      (-> (.startRendering ctx)
-          (.then (fn [buffer]
-                   (let [url (js/URL.createObjectURL (wav-blob buffer 1)) a (.createElement js/document "a")]
-                     (set! (.-href a) url) (set! (.-download a) (str "kami-daw-stem-" track-id ".wav")) (.click a)
-                     (js/setTimeout #(js/URL.revokeObjectURL url) 1000) (on-done))))))))
+      (-> (.startRendering ctx) (.then #(wav-blob % 1))))))
+
+(defn render-stems! [project buffers effects]
+  (reduce (fn [promise track]
+            (.then promise
+                   (fn [rendered]
+                     (-> (render-track-wav! project (:track/id track) buffers effects)
+                         (.then #(conj rendered {:track/id (:track/id track) :blob %}))))))
+          (js/Promise.resolve []) (:project/tracks project)))
+
+(defn export-track-wav! [project track-id buffers effects on-done]
+  (-> (render-track-wav! project track-id buffers effects)
+      (.then (fn [blob]
+               (let [url (js/URL.createObjectURL blob) a (.createElement js/document "a")]
+                 (set! (.-href a) url) (set! (.-download a) (str "kami-daw-stem-" track-id ".wav")) (.click a)
+                 (js/setTimeout #(js/URL.revokeObjectURL url) 1000) (on-done))))))

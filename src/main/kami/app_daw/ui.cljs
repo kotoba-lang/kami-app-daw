@@ -8,7 +8,7 @@
                    :track/clips [{:clip/id "chords" :clip/name "Chords" :clip/start-tick 960 :clip/length-ticks 2880}]}
                   {:track/id "voice" :track/name "Voice" :track/color "#c4b5fd" :track/gain 0.9
                    :track/clips [{:clip/id "hook" :clip/name "Hook" :clip/start-tick 2400 :clip/length-ticks 1440}]}]}))
-(defonce state (r/atom {:project sample :history daw/empty-history :history-replaying? false :clip-drag nil :clip-preview nil :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :analyzing? false :loudness-report nil :normalize-export? true :target-lufs -14 :true-peak-ceiling-db -1 :stem-exporting nil :directory-searching? false :directory-result nil :recording nil :recording-loop nil :recording-cancelled? false :input-monitoring? false :input-monitor-active? false :input-monitor-gain 0.35 :input-monitor-db -96 :recording-error nil :project-error nil :recovered? false :punch-length-ticks 960 :loop-takes 3 :buffers {} :assets {}}))
+(defonce state (r/atom {:project sample :history daw/empty-history :history-replaying? false :clip-drag nil :clip-preview nil :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :analyzing? false :loudness-report nil :normalize-export? true :target-lufs -14 :true-peak-ceiling-db -1 :stem-exporting nil :stem-bundle-exporting? false :directory-searching? false :directory-result nil :recording nil :recording-loop nil :recording-cancelled? false :input-monitoring? false :input-monitor-active? false :input-monitor-gain 0.35 :input-monitor-db -96 :recording-error nil :project-error nil :recovered? false :punch-length-ticks 960 :loop-takes 3 :buffers {} :assets {}}))
 (defonce meter-timer (atom nil))
 (defonce input-monitor-timer (atom nil))
 (defonce recorder-runtime (atom nil))
@@ -176,6 +176,25 @@
   (swap! state assoc :stem-exporting track-id)
   (audio/export-track-wav! (:project @state) track-id (:buffers @state) (select-keys @state [:cutoff :delay])
                            #(swap! state assoc :stem-exporting nil)))
+(declare download-file!)
+(defn export-stem-bundle! []
+  (let [project (:project @state) effects (select-keys @state [:cutoff :delay])]
+    (swap! state assoc :stem-bundle-exporting? true :project-error nil)
+    (-> (audio/render-stems! project (:buffers @state) effects)
+        (.then (fn [rendered]
+                 (-> (.all js/Promise (clj->js (map #(.arrayBuffer (:blob %)) rendered)))
+                     (.then (fn [values]
+                              (let [entries #js {}]
+                                (aset entries "project.edn" (strToU8 (pr-str project)))
+                                (aset entries "stems.edn" (strToU8 (pr-str (daw/stem-bundle-manifest project))))
+                                (doseq [[index array-buffer] (map-indexed vector (array-seq values))]
+                                  (aset entries (daw/stem-entry-name index) (js/Uint8Array. array-buffer)))
+                                (download-file! (js/Blob. #js [(zipSync entries #js {:level 0})]
+                                                              #js {:type "application/zip"})
+                                                "kami-daw-stems.kami.zip")))))))
+        (.then #(swap! state assoc :stem-bundle-exporting? false))
+        (.catch #(swap! state assoc :stem-bundle-exporting? false
+                        :project-error (str "Stem bundle export failed: " (.-message %)))))))
 (defn download-project! []
   (let [blob (js/Blob. #js [(pr-str (:project @state))] #js {:type "application/edn"})
         url (js/URL.createObjectURL blob) a (.createElement js/document "a")]
@@ -527,6 +546,8 @@
                                          :on-change #(swap! state assoc :true-peak-ceiling-db (js/parseFloat (.. % -target -value)))}]]
    [:button {:on-click analyze-master! :disabled (:analyzing? @state)} (if (:analyzing? @state) "Analyzing…" "Analyze loudness")]
    [:button {:on-click export! :disabled (:exporting? @state)} (if (:exporting? @state) "Rendering…" "Export WAV")]
+   [:button {:on-click export-stem-bundle! :disabled (:stem-bundle-exporting? @state)}
+    (if (:stem-bundle-exporting? @state) "Rendering all stems…" "Export all stems")]
    [:button {:on-click download-project!} "Save project EDN"]
    [:label "Open project EDN" [:input {:type "file" :accept ".edn,application/edn" :aria-label "Open DAW project EDN" :on-change load-project!}]]
    [:button {:on-click export-package!} "Package project + media"]
