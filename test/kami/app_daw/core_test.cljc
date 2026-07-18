@@ -188,13 +188,25 @@
         fader (daw/mackie-channel-message 0xE1 0x7F 0x7F)
         mute (daw/mackie-channel-message 0x90 0x10 0x7F)
         solo (daw/mackie-channel-message 0x90 0x09 0x7F)]
-    (is (= {:mackie/action :fader :mackie/strip 1 :mackie/value 1.0} fader))
+    (is (= {:mackie/action :fader :mackie/strip 1 :mackie/local-strip 1 :mackie/value 1.0} fader))
     (is (= 1.0 (get-in (daw/apply-mackie-channel project fader) [:project/tracks 1 :track/gain])))
     (is (true? (get-in (daw/apply-mackie-channel project mute) [:project/tracks 0 :track/mute?])))
     (is (true? (get-in (daw/apply-mackie-channel project solo) [:project/tracks 1 :track/solo?])))
     (is (= [225 127 127] (daw/mackie-feedback-message fader true)))
     (is (= [144 16 127] (daw/mackie-feedback-message mute true)))
     (is (nil? (daw/mackie-channel-message 0x90 0x10 0)))))
+(deftest mackie-bank-pan-and-record-arm
+  (let [tracks (mapv (fn [index] {:track/id (str "t" index) :track/pan 0}) (range 10))
+        project (daw/project {:project/tracks tracks})
+        pan (daw/mackie-channel-message 0xB0 0x10 0x05 8)
+        arm (daw/mackie-channel-message 0x90 0x00 0x7F 8)]
+    (is (= 8 (daw/mackie-bank-offset 0 8 10)))
+    (is (= 0 (daw/mackie-bank-offset 8 -8 10)))
+    (is (= {:mackie/action :bank :mackie/delta 8} (daw/mackie-channel-message 0x90 0x2F 0x7F 0)))
+    (is (= 0.1 (get-in (daw/apply-mackie-channel project pan) [:project/tracks 8 :track/pan])))
+    (is (true? (get-in (daw/apply-mackie-channel project arm) [:project/tracks 8 :track/armed?])))
+    (is (= [176 16 70] (daw/mackie-feedback-message (assoc pan :mackie/value 0.1) true)))
+    (is (= [144 0 127] (daw/mackie-feedback-message arm true)))))
 (deftest project-authoritative-bus-automation
   (let [automated (daw/set-bus-gain-automation p "master" [{:tick 960 :gain 0.25} {:tick 0 :gain 1.0}])]
     (is (= [{:automation/tick 0 :automation/gain 1.0} {:automation/tick 960 :automation/gain 0.25}]
