@@ -1,5 +1,6 @@
 (ns kami.app-daw.ui (:require [reagent.core :as r] [reagent.dom.client :as rdom] [cljs.reader :as reader]
-                              [kami.app-daw.core :as daw] [kami.app-daw.audio :as audio]))
+                              [kami.app-daw.core :as daw] [kami.app-daw.audio :as audio]
+                              ["fflate" :refer [zipSync unzipSync strToU8 strFromU8]]))
 (def sample (daw/project {:project/id "demo-song" :project/name "夜明けの波形"
  :project/tracks [{:track/id "drums" :track/name "Drums" :track/color "#ff8a65" :track/gain 0.82
                    :track/clips [{:clip/id "beat-a" :clip/name "Beat A" :clip/start-tick 0 :clip/length-ticks 1920}]}
@@ -33,7 +34,7 @@
                      (fn [buffer]
                        (swap! state (fn [s]
                                       (-> s (assoc-in [:buffers asset-id] buffer)
-                                          (assoc-in [:assets asset-id] {:name (.-name file) :sha256 sha256 :waveform (audio/waveform buffer 48)})
+                                          (assoc-in [:assets asset-id] {:name (.-name file) :type (.-type file) :sha256 sha256 :blob file :waveform (audio/waveform buffer 48)})
                                           (update :project daw/register-asset asset-id (.-name file) sha256)
                                           (update :project daw/set-track (:track/id track) :track/clips
                                                   (mapv #(assoc % :clip/asset-id asset-id) (:track/clips track))))))))))))))
@@ -45,7 +46,7 @@
                    (audio/decode-file! file
                      (fn [buffer]
                        (swap! state (fn [s] (-> s (assoc-in [:buffers asset-id] buffer)
-                                                 (assoc-in [:assets asset-id] {:name (.-name file) :sha256 sha256 :waveform (audio/waveform buffer 48)}))))))))))))
+                                                 (assoc-in [:assets asset-id] {:name (.-name file) :type (.-type file) :sha256 sha256 :blob file :waveform (audio/waveform buffer 48)}))))))))))))
 (defn finish-recording! [{:keys [track-id start-tick planned-sec chunks stream stop-timer]}]
   (when stop-timer (js/clearTimeout stop-timer))
   (doseq [media-track (array-seq (.getTracks stream))] (.stop media-track))
@@ -58,7 +59,7 @@
           (swap! state (fn [s]
                          (-> s (assoc :recording nil :recording-error nil)
                              (assoc-in [:buffers asset-id] buffer)
-                             (assoc-in [:assets asset-id] {:name "Recorded take" :waveform (audio/waveform buffer 48)})
+                             (assoc-in [:assets asset-id] {:name "Recorded take.webm" :type "audio/webm" :blob blob :waveform (audio/waveform buffer 48)})
                              (update :project daw/register-asset asset-id "Recorded take")
                              (update :project daw/add-recorded-clip track-id asset-id start-tick duration clip-id)
                              (assoc :selected clip-id)))))))))
@@ -96,6 +97,97 @@
         url (js/URL.createObjectURL blob) a (.createElement js/document "a")]
     (set! (.-href a) url) (set! (.-download a) "kami-daw-project.edn") (.click a)
     (js/setTimeout #(js/URL.revokeObjectURL url) 1000)))
+(defn download-file! [blob filename]
+  (let [url (js/URL.createObjectURL blob) a (.createElement js/document "a")]
+    (set! (.-href a) url) (set! (.-download a) filename) (.click a)
+    (js/setTimeout #(js/URL.revokeObjectURL url) 1000)))
+(defn export-package! []
+  (let [project (:project @state) asset-ids (sort (keys (:project/assets project)))
+        missing (vec (remove #(get-in @state [:assets % :blob]) asset-ids))
+        total (reduce + 0 (keep #(some-> (get-in @state [:assets % :blob]) .-size) asset-ids))]
+    (cond
+      (seq missing) (swap! state assoc :project-error (str "Relink media before packaging: " (pr-str missing)))
+      (> total daw/package-max-bytes) (swap! state assoc :project-error "Package media exceeds the 512 MiB browser limit")
+      :else
+      (-> (.all js/Promise
+                (clj->js
+                 (map-indexed
+                  (fn [index asset-id]
+                    (let [asset (get-in @state [:assets asset-id]) blob (:blob asset)]
+                      (-> (.all js/Promise #js [(.arrayBuffer blob) (sha256-file! blob)])
+                          (.then (fn [values]
+                                   {:asset-id asset-id :entry-name (daw/package-entry-name index)
+                                    :name (:name asset) :type (or (:type asset) (.-type blob) "application/octet-stream")
+                                    :sha256 (aget values 1) :bytes (js/Uint8Array. (aget values 0))})))))
+                  asset-ids)))
+          (.then
+           (fn [values]
+             (let [items (array-seq values)
+                   packaged-project (reduce (fn [p {:keys [asset-id sha256]}]
+                                              (assoc-in p [:project/assets asset-id :asset/sha256] sha256)) project items)
+                   media (into {} (map (fn [{:keys [asset-id entry-name name type sha256]}]
+                                         [asset-id {:entry/name entry-name :media/name name :media/type type :media/sha256 sha256}]) items))
+                   entries #js {}]
+               (aset entries "project.edn" (strToU8 (pr-str packaged-project)))
+               (aset entries "media.edn" (strToU8 (pr-str (daw/package-manifest packaged-project media))))
+               (doseq [{:keys [entry-name bytes]} items] (aset entries entry-name bytes))
+               (download-file! (js/Blob. #js [(zipSync entries #js {:level 0})] #js {:type "application/zip"})
+                               "kami-daw-package.kami.zip")
+               (swap! state assoc :project-error nil))))
+          (.catch #(swap! state assoc :project-error (str "Package export failed: " (.-message %))))))))
+(defn decode-blob! [blob]
+  (js/Promise. (fn [resolve reject]
+                 (try (audio/decode-file! blob resolve reject)
+                      (catch :default error (reject error))))))
+(defn unzip-package [array-buffer]
+  (let [expanded-bytes (atom 0)]
+    (unzipSync (js/Uint8Array. array-buffer)
+               #js {:filter (fn [entry]
+                              (swap! expanded-bytes + (.-originalSize entry))
+                              (when (> @expanded-bytes daw/package-max-bytes)
+                                (throw (js/Error. "Expanded package exceeds the 512 MiB browser limit")))
+                              true)})))
+(defn open-package! [event]
+  (when-let [file (aget (.. event -target -files) 0)]
+    (if (> (.-size file) daw/package-max-bytes)
+      (swap! state assoc :project-error "Package exceeds the 512 MiB browser limit")
+      (-> (.arrayBuffer file)
+          (.then
+           (fn [array-buffer]
+             (let [entries (unzip-package array-buffer) names (set (js->clj (js/Object.keys entries)))
+                   project-entry (aget entries "project.edn") manifest-entry (aget entries "media.edn")]
+               (when-not (and project-entry manifest-entry) (throw (js/Error. "Package metadata is missing")))
+               (let [project (reader/read-string (strFromU8 project-entry))
+                     manifest (reader/read-string (strFromU8 manifest-entry))
+                     accepted (daw/accept-package project manifest names)]
+                 (when-not accepted (throw (js/Error. "Package contract is invalid")))
+                 (-> (.all js/Promise
+                           (clj->js
+                            (map (fn [[asset-id descriptor]]
+                                   (let [blob (js/Blob. #js [(aget entries (:entry/name descriptor))]
+                                                        #js {:type (:media/type descriptor)})]
+                                     (-> (sha256-file! blob)
+                                         (.then (fn [sha256]
+                                                  (when-not (= sha256 (:media/sha256 descriptor))
+                                                    (throw (js/Error. (str "Media checksum mismatch: " asset-id))))
+                                                  (-> (decode-blob! blob)
+                                                      (.then (fn [buffer] {:asset-id asset-id :descriptor descriptor
+                                                                          :blob blob :buffer buffer}))))))))
+                                 (:media accepted))))
+                     (.then (fn [values] {:project (:project accepted) :items (array-seq values)})))))))
+          (.then
+           (fn [{:keys [project items]}]
+             (let [first-clip (first (mapcat :track/clips (:project/tracks project)))
+                   buffers (into {} (map (juxt :asset-id :buffer) items))
+                   assets (into {} (map (fn [{:keys [asset-id descriptor blob buffer]}]
+                                          [asset-id {:name (:media/name descriptor) :type (:media/type descriptor)
+                                                     :sha256 (:media/sha256 descriptor) :blob blob
+                                                     :waveform (audio/waveform buffer 48)}]) items))]
+               (audio/stop!) (stop-meter!)
+               (swap! state assoc :project project :selected (:clip/id first-clip)
+                      :tick (or (:clip/start-tick first-clip) 0) :playing? false :project-error nil
+                      :buffers buffers :assets assets))))
+          (.catch #(swap! state assoc :project-error (str "Package import failed: " (.-message %))))))))
 (defn load-project! [event]
   (when-let [file (aget (.. event -target -files) 0)]
     (-> (.text file)
@@ -211,6 +303,8 @@
    [:button {:on-click export! :disabled (:exporting? @state)} (if (:exporting? @state) "Rendering…" "Export WAV")]
    [:button {:on-click download-project!} "Save project EDN"]
    [:label "Open project EDN" [:input {:type "file" :accept ".edn,application/edn" :aria-label "Open DAW project EDN" :on-change load-project!}]]
+   [:button {:on-click export-package!} "Package project + media"]
+   [:label "Open media package" [:input {:type "file" :accept ".zip,.kami.zip,application/zip" :aria-label "Open DAW media package" :on-change open-package!}]]
    [:label "Relink audio" [:input {:type "file" :accept "audio/*" :multiple true :aria-label "Relink DAW audio files" :on-change relink-audio!}]]
    [:button {:on-click undo! :disabled (empty? (get-in @state [:history :history/past])) :aria-label "Undo project edit"} "↶ Undo"]
    [:button {:on-click redo! :disabled (empty? (get-in @state [:history :history/future])) :aria-label "Redo project edit"} "↷ Redo"]

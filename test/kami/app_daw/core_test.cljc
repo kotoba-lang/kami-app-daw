@@ -62,3 +62,13 @@
                       (:history (daw/recover-workspace
                                  (daw/recovery-envelope p2 {:history/past (vec (repeat 70 p))
                                                             :history/future []})))))))))
+(deftest portable-media-package-contract
+  (let [sha (apply str (repeat 64 "a"))
+        packaged (daw/register-asset p "audio:t" "take.wav" sha)
+        media {"audio:t" {:entry/name "media/0" :media/name "take.wav" :media/type "audio/wav" :media/sha256 sha}}
+        manifest (daw/package-manifest packaged media)]
+    (is (= {:project packaged :media media} (daw/accept-package packaged manifest #{"media/0"})))
+    (is (nil? (daw/accept-package packaged manifest #{})))
+    (is (nil? (daw/accept-package packaged (assoc-in manifest [:package/media "audio:t" :media/sha256]
+                                                      (apply str (repeat 64 "b"))) #{"media/0"})))
+    (is (= "media/7" (daw/package-entry-name 7)))))

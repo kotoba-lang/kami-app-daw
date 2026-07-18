@@ -117,3 +117,27 @@
       nil)))
 (defn recover-project [value]
   (:project (recover-workspace value)))
+(def package-version 1)
+(def package-max-bytes (* 512 1024 1024))
+(defn package-entry-name [index] (str "media/" index))
+(defn package-manifest [p media]
+  {:package/version package-version :package/project-schema (:project/schema p) :package/media media})
+(defn accept-package [p manifest entry-names]
+  (let [media (:package/media manifest)
+        asset-ids (set (keys (:project/assets p)))]
+    (when (and (accept-project p)
+               (= package-version (:package/version manifest))
+               (= schema (:package/project-schema manifest))
+               (map? media)
+               (= asset-ids (set (keys media)))
+               (= (count media) (count (set (map (comp :entry/name val) media))))
+               (every? (fn [[asset-id descriptor]]
+                         (and (boolean (re-matches #"media/[0-9]+" (:entry/name descriptor)))
+                              (contains? entry-names (:entry/name descriptor))
+                              (string? (:media/name descriptor))
+                              (string? (:media/type descriptor))
+                              (boolean (re-matches #"[0-9a-f]{64}" (:media/sha256 descriptor)))
+                              (let [expected (get-in p [:project/assets asset-id :asset/sha256])]
+                                (or (nil? expected) (= expected (:media/sha256 descriptor))))))
+                       media))
+      {:project p :media media})))
