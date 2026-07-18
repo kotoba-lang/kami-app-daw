@@ -30,6 +30,21 @@
     (is (= [[:invalid-send-automation-order "t"]]
            (daw/validate-project (assoc-in automated [:project/tracks 0 :track/send-automation]
                                            [{:automation/tick 960 :automation/send 1} {:automation/tick 0 :automation/send 0}]))))))
+(deftest project-authoritative-effect-parameter-automation
+  (let [automated (-> p
+                      (daw/set-master-effect :delay/feedback 2)
+                      (daw/set-effect-automation :filter/cutoff-hz
+                                                 [{:tick 960 :value 25000} {:tick 0 :value 80}]))]
+    (is (= 0.9 (get-in automated [:project/master-effects :delay/feedback])))
+    (is (= [{:automation/tick 0 :automation/value 80}
+            {:automation/tick 960 :automation/value 20000.0}]
+           (get-in automated [:project/master-effects :effect/automation :filter/cutoff-hz])))
+    (is (empty? (daw/validate-project automated)))
+    (is (= [[:invalid-effect-automation :delay/time-sec]]
+           (daw/validate-project
+            (assoc-in automated [:project/master-effects :effect/automation :delay/time-sec]
+                      [{:automation/tick 960 :automation/value 0.2}
+                       {:automation/tick 0 :automation/value 0.1}]))))))
 (deftest bus-routing
   (let [routed (daw/route-track p "t" "master" 0.35)]
     (is (= ["master" 0.35] ((juxt :track/bus-id :track/send) (get-in routed [:project/tracks 0]))))

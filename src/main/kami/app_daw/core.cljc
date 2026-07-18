@@ -20,6 +20,8 @@
     {:project current :history history}))
 (defn project [m] (merge {:project/schema schema :project/ppq 480 :project/bpm 120
                            :project/buses [{:bus/id "master" :bus/name "Master" :bus/gain 1.0}]
+                           :project/master-effects {:filter/cutoff-hz 4200.0 :delay/time-sec 0.12 :delay/feedback 0.28
+                                                    :effect/automation {}}
                            :project/assets {} :project/tracks []} m))
 (defn register-asset
   ([p asset-id name] (register-asset p asset-id name nil))
@@ -109,6 +111,24 @@
                                                {:automation/tick (max 0 tick) :automation/gain (max 0 gain)}))
                                  (sort-by :automation/tick) vec))
                      bus)) %)))
+(def effect-ranges {:filter/cutoff-hz [40.0 20000.0]
+                    :delay/time-sec [0.0 1.0]
+                    :delay/feedback [0.0 0.9]})
+(defn clamp-effect-value [parameter value]
+  (let [[minimum maximum] (get effect-ranges parameter [0.0 1.0])]
+    (max minimum (min maximum (or value minimum)))))
+(defn set-master-effect [p parameter value]
+  (if (contains? effect-ranges parameter)
+    (assoc-in p [:project/master-effects parameter] (clamp-effect-value parameter value)) p))
+(defn set-effect-automation [p parameter points]
+  (if (contains? effect-ranges parameter)
+    (assoc-in p [:project/master-effects :effect/automation parameter]
+              (->> points
+                   (mapv (fn [{:keys [tick value]}]
+                           {:automation/tick (max 0 tick)
+                            :automation/value (clamp-effect-value parameter value)}))
+                   (sort-by :automation/tick) vec))
+    p))
 (defn solo-track-project [p track-id]
   (update p :project/tracks #(vec (filter (fn [track] (= track-id (:track/id track))) %))))
 (defn route-track [p track-id bus-id send]
@@ -183,6 +203,13 @@
               :let [points (:bus/gain-automation bus)]
               :when (and (seq points) (not (apply <= (map :automation/tick points))))]
           [:invalid-bus-automation-order (:bus/id bus)])
+        (for [[parameter points] (get-in p [:project/master-effects :effect/automation])
+              :when (or (not (contains? effect-ranges parameter))
+                        (and (seq points) (not (apply <= (map :automation/tick points))))
+                        (some (fn [point]
+                                (not= (:automation/value point)
+                                      (clamp-effect-value parameter (:automation/value point)))) points))]
+          [:invalid-effect-automation parameter])
         (let [bus-ids (set (map :bus/id (:project/buses p)))]
           (for [track (:project/tracks p)
                 :when (and (:track/bus-id track) (not (contains? bus-ids (:track/bus-id track))))]

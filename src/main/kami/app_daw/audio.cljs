@@ -43,19 +43,31 @@
         (if (pos? rms) (* 20 (/ (js/Math.log rms) (js/Math.log 10))) -96)))
     -96))
 
-(defn- connect-chain! [ctx destination cutoff delay-seconds]
-  (let [filter (.createBiquadFilter ctx)
+(defn- schedule-effect-param! [param project start base points]
+  (.setValueAtTime param base start)
+  (doseq [point points]
+    (.linearRampToValueAtTime param (:automation/value point)
+                              (+ start (daw/tick->seconds project (:automation/tick point))))))
+
+(defn- connect-chain! [ctx destination project effects]
+  (let [authority (:project/master-effects project)
+        cutoff (or (:filter/cutoff-hz authority) (:cutoff effects) 4200)
+        delay-seconds (or (:delay/time-sec authority) (:delay effects) 0.12)
+        feedback-value (or (:delay/feedback authority) 0.28)
+        automation (:effect/automation authority)
+        start (+ (.-currentTime ctx) 0.05)
+        filter (.createBiquadFilter ctx)
         delay (.createDelay ctx 1.0)
         feedback (.createGain ctx)
         analyser (.createAnalyser ctx)]
     (set! (.-type filter) "lowpass")
-    (set! (.. filter -frequency -value) cutoff)
-    (set! (.. delay -delayTime -value) delay-seconds)
-    (set! (.. feedback -gain -value) (if (pos? delay-seconds) 0.28 0))
+    (schedule-effect-param! (.-frequency filter) project start cutoff (get automation :filter/cutoff-hz))
+    (schedule-effect-param! (.-delayTime delay) project start delay-seconds (get automation :delay/time-sec))
+    (schedule-effect-param! (.-gain feedback) project start feedback-value (get automation :delay/feedback))
     (.connect filter delay) (.connect delay feedback) (.connect feedback delay)
     (set! (.-fftSize analyser) 512)
     (.connect filter analyser) (.connect delay analyser) (.connect analyser destination)
-    {:input filter :analyser analyser}))
+    {:input filter :analyser analyser :filter filter :delay delay :feedback feedback}))
 
 (defn meter-db []
   (if-let [analyser (:analyser @runtime)]
@@ -135,7 +147,7 @@
 (defn play! [project buffers {:keys [cutoff delay]}]
   (stop!)
   (let [ctx (audio-context)
-        chain (connect-chain! ctx (.-destination ctx) cutoff delay)
+        chain (connect-chain! ctx (.-destination ctx) project {:cutoff cutoff :delay delay})
         start (schedule! ctx (:input chain) project buffers)]
     (.resume ctx)
     (reset! runtime {:context ctx :started start :analyser (:analyser chain)})
@@ -160,7 +172,7 @@
 (defn- render-project! [project buffers {:keys [cutoff delay]}]
   (let [seconds (+ 1 (daw/tick->seconds project (daw/duration-ticks project)))
         ctx (js/OfflineAudioContext. 1 (js/Math.ceil (* 44100 seconds)) 44100)
-        chain (connect-chain! ctx (.-destination ctx) cutoff delay)]
+        chain (connect-chain! ctx (.-destination ctx) project {:cutoff cutoff :delay delay})]
     (schedule! ctx (:input chain) project buffers)
     (.startRendering ctx)))
 
@@ -227,7 +239,7 @@
   (let [stem (daw/solo-track-project project track-id)]
     (let [seconds (+ 1 (daw/tick->seconds stem (daw/duration-ticks stem)))
           ctx (js/OfflineAudioContext. 1 (js/Math.ceil (* 44100 seconds)) 44100)
-          chain (connect-chain! ctx (.-destination ctx) (:cutoff effects) (:delay effects))]
+          chain (connect-chain! ctx (.-destination ctx) stem effects)]
       (schedule! ctx (:input chain) stem buffers)
       (-> (.startRendering ctx)
           (.then (fn [buffer]
