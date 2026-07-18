@@ -221,6 +221,10 @@
    (let [command (bit-and status 0xF0) channel-strip (bit-and status 0x0F)
          strip #(+ bank %)]
      (cond
+       (and (= command 0x90) (<= 0x68 data1 0x6F))
+       (let [local (- data1 0x68)]
+         {:mackie/action :fader-touch :mackie/strip (strip local) :mackie/local-strip local
+          :mackie/touched? (pos? data2)})
        (and (= command 0x90) (pos? data2) (= data1 0x2E)) {:mackie/action :bank :mackie/delta -8}
        (and (= command 0x90) (pos? data2) (= data1 0x2F)) {:mackie/action :bank :mackie/delta 8}
        (and (= command 0xE0) (< channel-strip 8))
@@ -262,6 +266,9 @@
     :solo [0x90 (+ 0x08 strip) (if enabled? 127 0)]
     :mute [0x90 (+ 0x10 strip) (if enabled? 127 0)]
     nil)))
+(defn mackie-motor-feedback? [touched-strips message]
+  (not (and (= :fader (:mackie/action message))
+            (contains? (or touched-strips #{}) (:mackie/strip message)))))
 (defn apply-midi-cc [p channel cc midi-value tick]
   (if-let [mapping (midi-mapping-for p channel cc)]
     (let [value (/ (max 0 (min 127 (or midi-value 0))) 127.0)
