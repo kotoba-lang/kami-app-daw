@@ -117,6 +117,10 @@
   (let [package {:package/version 1 :package/id "vendor.gain"
                  :package/source-sha256 "0000000000000000000000000000000000000000000000000000000000000000"
                  :package/capabilities #{:audio-processing}
+                 :package/publisher-id "vendor.audio" :package/publisher-name "Vendor Audio"
+                 :package/publisher-key {:kty "EC"}
+                 :package/publisher-fingerprint "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                 :package/signature "AA=="
                  :package/source "class GainProcessor {}\nregisterProcessor('vendor-gain', GainProcessor);"
                  :package/descriptor
                  {:plugin/name "Vendor Gain" :plugin/processor "vendor-gain"
@@ -136,6 +140,18 @@
            (daw/third-party-plugin-package-errors (assoc package :package/version 2))))
     (is (= [[:invalid-plugin "vendor-gain-1"]]
            (daw/validate-project (assoc-in installed [:project/plugins 0 :plugin/source] ""))))))
+(deftest publisher-trust-is-project-authority-and-revocation-disables-plugins
+  (let [fingerprint (apply str (repeat 64 "a"))
+        trusted (daw/trust-plugin-publisher p "vendor.audio" fingerprint "Vendor Audio")
+        plugin {:plugin/id "vendor-1" :plugin/publisher-id "vendor.audio" :plugin/enabled? true}
+        project (assoc trusted :project/plugins [plugin])
+        package {:package/publisher-id "vendor.audio" :package/publisher-fingerprint fingerprint}
+        revoked (daw/revoke-plugin-publisher project "vendor.audio")]
+    (is (daw/trusted-plugin-package? trusted package))
+    (is (not (daw/trusted-plugin-package? trusted (assoc package :package/publisher-fingerprint (apply str (repeat 64 "b"))))))
+    (is (empty? (:project/trusted-publishers revoked)))
+    (is (= false (get-in revoked [:project/plugins 0 :plugin/enabled?])))
+    (is (= :revoked (get-in revoked [:project/plugins 0 :plugin/trust])))))
 (deftest plugin-mix-interpolation-is-validated-project-authority
   (let [plugin (daw/add-plugin p "sat" :kami/saturator)
         stepped (daw/set-plugin-mix-interpolation plugin "sat" :step)]
