@@ -2,6 +2,7 @@
 
 (def schema "kami.ongaku-project/v1")
 (defn project [m] (merge {:project/schema schema :project/ppq 480 :project/bpm 120
+                           :project/buses [{:bus/id "master" :bus/name "Master" :bus/gain 1.0}]
                            :project/tracks []} m))
 (defn clip-end [clip] (+ (:clip/start-tick clip) (:clip/length-ticks clip)))
 (defn duration-ticks [p] (reduce max 0 (map clip-end (mapcat :track/clips (:project/tracks p)))))
@@ -30,6 +31,9 @@
                   (sort-by :automation/tick) vec)))
 (defn solo-track-project [p track-id]
   (update p :project/tracks #(vec (filter (fn [track] (= track-id (:track/id track))) %))))
+(defn route-track [p track-id bus-id send]
+  (-> p (set-track track-id :track/bus-id bus-id)
+      (set-track track-id :track/send (max 0 (min 1 send)))))
 (defn validate-project [p]
   (vec (concat
         (when-not (= schema (:project/schema p)) [:unsupported-schema])
@@ -40,6 +44,10 @@
               :when (and (seq points)
                          (not (apply <= (map :automation/tick points))))]
           [:invalid-automation-order (:track/id track)])
+        (let [bus-ids (set (map :bus/id (:project/buses p)))]
+          (for [track (:project/tracks p)
+                :when (and (:track/bus-id track) (not (contains? bus-ids (:track/bus-id track))))]
+            [:missing-bus (:track/id track) (:track/bus-id track)]))
         (for [c (mapcat :track/clips (:project/tracks p))
               :when (or (neg? (:clip/start-tick c)) (not (pos-int? (:clip/length-ticks c)))
                         (neg? (or (:clip/source-offset-sec c) 0))

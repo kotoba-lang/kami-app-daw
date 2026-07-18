@@ -60,6 +60,9 @@
       [:div.buttons
        [:label "A→" [:input {:type "number" :min 0 :max 2 :step .05 :value start-gain :aria-label (str (:track/name track) " automation start") :on-change #(set-automation! track 0 (js/parseFloat (.. % -target -value)))}]]
        [:label "→B" [:input {:type "number" :min 0 :max 2 :step .05 :value end-gain :aria-label (str (:track/name track) " automation end") :on-change #(set-automation! track end-tick (js/parseFloat (.. % -target -value)))}]]])
+    [:label "Send" [:input {:type "range" :min 0 :max 1 :step .05 :value (or (:track/send track) 0)
+                             :aria-label (str (:track/name track) " delay send")
+                             :on-change #(swap! state update :project daw/route-track (:track/id track) "master" (js/parseFloat (.. % -target -value)))}]]
     [:button {:on-click #(export-stem! (:track/id track)) :disabled (= (:track/id track) (:stem-exporting @state))}
      (if (= (:track/id track) (:stem-exporting @state)) "Rendering stem…" "Export stem")]
     [:input {:type "range" :min 0 :max 1 :step .01 :value (:track/gain track)

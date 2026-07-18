@@ -48,7 +48,14 @@
           (range points))))
 
 (defn- schedule! [ctx destination project buffers]
-  (let [start (+ (.-currentTime ctx) 0.05)]
+  (let [start (+ (.-currentTime ctx) 0.05)
+        bus-nodes (into {} (map (fn [bus] (let [gain (.createGain ctx)]
+                                            (set! (.. gain -gain -value) (or (:bus/gain bus) 1))
+                                            (.connect gain destination) [(:bus/id bus) gain])) (:project/buses project)))
+        default-bus (or (get bus-nodes "master") destination)
+        send-delay (.createDelay ctx 1.0) send-feedback (.createGain ctx)]
+    (set! (.. send-delay -delayTime -value) 0.18) (set! (.. send-feedback -gain -value) 0.32)
+    (.connect send-delay send-feedback) (.connect send-feedback send-delay) (.connect send-delay destination)
     (doseq [track (:project/tracks project)
             :when (not (:track/mute? track))
             clip (:track/clips track)]
@@ -72,7 +79,11 @@
         (doseq [point (:track/gain-automation track)]
           (.linearRampToValueAtTime (.-gain track-gain) (:automation/gain point)
                                     (+ start (daw/tick->seconds project (:automation/tick point)))))
-        (.connect source gain) (.connect gain track-gain) (.connect track-gain destination)
+        (let [bus (or (get bus-nodes (:track/bus-id track)) default-bus)
+              send-gain (.createGain ctx)]
+          (set! (.. send-gain -gain -value) (or (:track/send track) 0))
+          (.connect source gain) (.connect gain track-gain) (.connect track-gain bus)
+          (.connect track-gain send-gain) (.connect send-gain send-delay))
         (if buffer (.start source begin offset actual-duration) (.start source begin))
         (.stop source (+ begin actual-duration))))
     start))

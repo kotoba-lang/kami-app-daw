@@ -13,3 +13,9 @@
     (is (= [0 960] (mapv :automation/tick (get-in automated [:project/tracks 0 :track/gain-automation]))))
     (is (= ["t"] (mapv :track/id (:project/tracks (daw/solo-track-project automated "t")))))
     (is (empty? (daw/validate-project automated)))))
+(deftest bus-routing
+  (let [routed (daw/route-track p "t" "master" 0.35)]
+    (is (= ["master" 0.35] ((juxt :track/bus-id :track/send) (get-in routed [:project/tracks 0]))))
+    (is (empty? (daw/validate-project routed)))
+    (is (= [[:missing-bus "t" "missing"]]
+           (daw/validate-project (daw/route-track p "t" "missing" 0.1))))))
