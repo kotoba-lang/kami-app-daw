@@ -69,6 +69,15 @@
     (is (= [[:invalid-plugin "comp"]]
            (daw/validate-project
             (assoc-in automated [:project/plugins 0 :plugin/automation :threshold-db 0 :automation/value] -90))))))
+(deftest plugin-chain-order-and-removal-are-project-authority
+  (let [chain (-> p (daw/add-plugin "sat" :kami/saturator) (daw/add-plugin "comp" :kami/compressor))
+        moved (daw/move-plugin chain "comp" :up)
+        removed (daw/remove-plugin moved "sat")]
+    (is (= ["sat" "comp"] (mapv :plugin/id (:project/plugins chain))))
+    (is (= ["comp" "sat"] (mapv :plugin/id (:project/plugins moved))))
+    (is (= moved (daw/move-plugin moved "comp" :up)))
+    (is (= ["comp"] (mapv :plugin/id (:project/plugins removed))))
+    (is (empty? (daw/validate-project removed)))))
 (deftest project-authoritative-bus-automation
   (let [automated (daw/set-bus-gain-automation p "master" [{:tick 960 :gain 0.25} {:tick 0 :gain 1.0}])]
     (is (= [{:automation/tick 0 :automation/gain 1.0} {:automation/tick 960 :automation/gain 0.25}]

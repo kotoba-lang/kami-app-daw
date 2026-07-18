@@ -522,7 +522,7 @@
    [:button {:on-click #(swap! state update :project daw/add-plugin "master-compressor" :kami/compressor)
              :disabled (some (fn [plugin] (= "master-compressor" (:plugin/id plugin))) (:project/plugins project))}
     "Add AudioWorklet compressor"]
-   (for [plugin (:project/plugins project)]
+   (for [[plugin-index plugin] (map-indexed vector (:project/plugins project))]
      ^{:key (:plugin/id plugin)}
      [:span.effect-automation
       [:strong (:plugin/id plugin)]
@@ -530,6 +530,13 @@
                                    :aria-label (str (:plugin/id plugin) " enabled")
                                    :on-change #(swap! state update :project daw/set-plugin-enabled (:plugin/id plugin)
                                                       (.. % -target -checked))}]]
+      [:button {:aria-label (str "Move " (:plugin/id plugin) " up") :disabled (zero? plugin-index)
+                :on-click #(swap! state update :project daw/move-plugin (:plugin/id plugin) :up)} "↑"]
+      [:button {:aria-label (str "Move " (:plugin/id plugin) " down")
+                :disabled (= plugin-index (dec (count (:project/plugins project))))
+                :on-click #(swap! state update :project daw/move-plugin (:plugin/id plugin) :down)} "↓"]
+      [:button {:aria-label (str "Remove " (:plugin/id plugin))
+                :on-click #(swap! state update :project daw/remove-plugin (:plugin/id plugin))} "Remove"]
       (for [[parameter descriptor] (get-in daw/plugin-types [(:plugin/kind plugin) :plugin/parameters])
             :let [base (get-in plugin [:plugin/parameters parameter])
                   points (get-in plugin [:plugin/automation parameter])

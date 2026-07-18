@@ -161,6 +161,14 @@
   (update p :project/plugins
           #(mapv (fn [plugin] (if (= plugin-id (:plugin/id plugin))
                                 (assoc plugin :plugin/enabled? (boolean enabled?)) plugin)) %)))
+(defn remove-plugin [p plugin-id]
+  (update p :project/plugins #(vec (remove (fn [plugin] (= plugin-id (:plugin/id plugin))) %))))
+(defn move-plugin [p plugin-id direction]
+  (let [plugins (vec (:project/plugins p)) index (first (keep-indexed #(when (= plugin-id (:plugin/id %2)) %1) plugins))
+        target (when index (+ index (case direction :up -1 :down 1 0)))]
+    (if (and index (<= 0 target) (< target (count plugins)) (not= index target))
+      (assoc p :project/plugins (assoc plugins index (plugins target) target (plugins index)))
+      p)))
 (defn set-plugin-parameter [p plugin-id parameter value]
   (update p :project/plugins
           #(mapv (fn [plugin]
