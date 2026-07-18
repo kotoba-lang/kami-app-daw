@@ -45,6 +45,19 @@
            (daw/validate-project (update plugged :project/plugins conj plugin))))
     (is (= [[:invalid-plugin "sat"]]
            (daw/validate-project (assoc-in plugged [:project/plugins 0 :plugin/processor] "unknown"))))))
+(deftest manifest-driven-compressor-parameters
+  (let [plugged (daw/add-plugin p "comp" :kami/compressor)
+        edited (-> plugged
+                   (daw/set-plugin-parameter "comp" :threshold-db -24)
+                   (daw/set-plugin-parameter "comp" :ratio 30)
+                   (daw/set-plugin-parameter "comp" :makeup-db 6))]
+    (is (= {:threshold-db -18.0 :ratio 4.0 :makeup-db 0.0}
+           (:plugin/parameters (first (:project/plugins plugged)))))
+    (is (= {:threshold-db -24 :ratio 20.0 :makeup-db 6}
+           (:plugin/parameters (first (:project/plugins edited)))))
+    (is (empty? (daw/validate-project edited)))
+    (is (= [[:invalid-plugin "comp"]]
+           (daw/validate-project (assoc-in edited [:project/plugins 0 :plugin/parameters :unknown] 1))))))
 (deftest project-authoritative-bus-automation
   (let [automated (daw/set-bus-gain-automation p "master" [{:tick 960 :gain 0.25} {:tick 0 :gain 1.0}])]
     (is (= [{:automation/tick 0 :automation/gain 1.0} {:automation/tick 960 :automation/gain 0.25}]

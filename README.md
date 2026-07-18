@@ -4,7 +4,7 @@ EDN-native browser digital audio workstation for `kotoba-lang`. It owns music ar
 
 The production path is browser-native: imported files and microphone takes are decoded into `AudioBuffer`, displayed as waveforms, and scheduled through the same gain/effect graph used by `OfflineAudioContext` for the PCM WAV master. Recording offers an explicit, default-off headphone monitor with bounded gain and a dedicated WebAudio graph/meter; it exists only while a take owns its stream and is disconnected on take end, cancellation, error and page unload. Loop recording captures 1–8 takes at one range; every take remains in validated `:track/take-lanes`, while the selected comp alone is projected into `:track/clips` for playback/export. Active and inactive takes travel together in verified `.kami.zip` packages.
 
-Project-authoritative plugin slots load the built-in saturator as an `AudioWorkletProcessor`; realtime playback, the master, individual stems and the aligned stem bundle all instantiate the same processor and parameters. Third-party plugin SDK, signed distribution and processor isolation remain explicit commercial-product gaps.
+Project-authoritative plugin slots use one manifest for processor identity, parameter labels, defaults, bounds and UI. The built-in saturator and compressor run as `AudioWorkletProcessor` instances; realtime playback, the master, individual stems and the aligned stem bundle all instantiate the same ordered processors and parameters. Third-party plugin discovery/SDK, signed distribution and processor isolation remain explicit commercial-product gaps.
 
 ## Run
 
