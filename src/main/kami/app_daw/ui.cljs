@@ -1,5 +1,5 @@
 (ns kami.app-daw.ui (:require [reagent.core :as r] [reagent.dom.client :as rdom] [cljs.reader :as reader]
-                              [kami.app-daw.core :as daw] [kami.app-daw.audio :as audio]))
+                              [kami.app-daw.core :as daw] [kami.app-daw.audio :as audio] [kami.app-daw.bench :as bench]))
 (def sample (daw/project {:project/id "demo-song" :project/name "夜明けの波形"
  :project/tracks [{:track/id "drums" :track/name "Drums" :track/color "#ff8a65" :track/gain 0.82
                    :track/clips [{:clip/id "beat-a" :clip/name "Beat A" :clip/start-tick 0 :clip/length-ticks 1920}]}
@@ -8,6 +8,15 @@
                   {:track/id "voice" :track/name "Voice" :track/color "#c4b5fd" :track/gain 0.9
                    :track/clips [{:clip/id "hook" :clip/name "Hook" :clip/start-tick 2400 :clip/length-ticks 1440}]}]}))
 (defonce state (r/atom {:project sample :history daw/empty-history :history-replaying? false :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :stem-exporting nil :recording nil :recording-error nil :project-error nil :recovered? false :punch-length-ticks 960 :buffers {} :assets {}}))
+(defonce bench-run (r/atom (bench/initial-run)))
+(defn bench-panel [] (let [run @bench-run actor (some #(when (= (:id %) (:actor-id run)) %) bench/actors)]
+  [:aside.bench-panel {:aria-label "User test actor loop"}
+   [:div [:strong "User test loop"] [:select {:value (:actor-id run) :on-change #(do (swap! bench-run assoc :actor-id (.. % -target -value) :task-index 0) (bench/record! bench-run :actor-selected {:actor-id (.. % -target -value)}))} (for [{:keys [id label]} bench/actors] ^{:key id} [:option {:value id} label])]]
+   [:p [:small "Task "] (inc (:task-index run)) "/" (count (:tasks actor)) ": " (bench/current-task run)]
+   [:div.tools [:button {:on-click #(bench/record! bench-run :observation {:task (bench/current-task @bench-run)})} "Log observation"]
+    [:button {:on-click #(swap! bench-run update :task-index (fn [i] (min (dec (count (:tasks actor))) (inc i))))} "Next task"]]
+   [:textarea {:placeholder "Participant feedback…" :aria-label "Participant feedback" :on-blur #(when (seq (.. % -target -value)) (bench/record! bench-run :feedback {:text (.. % -target -value)}))}]
+   [:small (str "Evidence events: " (count (:events run)))] ]))
 (defonce meter-timer (atom nil))
 (defonce recorder-runtime (atom nil))
 (defonce shortcuts-installed? (atom false))
@@ -198,7 +207,7 @@
     (swap! state update :project daw/edit-clip id (assoc edit k value))))
 (defn app [] (let [{:keys [project playing? tick]} @state total (max 3840 (daw/duration-ticks project))
                     missing (daw/missing-asset-ids project (keys (:buffers @state)))]
- [:main [:header [:div [:small "KOTOBA-LANG / MUSIC"] [:h1 "KAMI DAW"]]
+ [:main [:header [:div [:small "KOTOBA-LANG / MUSIC"] [:h1 "KAMI DAW"]] [bench-panel]
    [:div.transport [:button.primary {:on-click toggle-play!} (if playing? "■ Stop" "▶ Play audio")]
     [:span (str "Tick " tick)] [:span (str (.toFixed (daw/tick->seconds project tick) 2) " s")]
     [:meter {:min -60 :max 0 :value (max -60 (:meter-db @state)) :title (str (.toFixed (:meter-db @state) 1) " dBFS")}]]]
