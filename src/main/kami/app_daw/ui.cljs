@@ -1,5 +1,5 @@
 (ns kami.app-daw.ui (:require [reagent.core :as r] [reagent.dom.client :as rdom] [cljs.reader :as reader]
-                              [kami.app-daw.core :as daw] [kami.app-daw.audio :as audio]
+                              [kami.app-daw.core :as daw] [kami.app-daw.audio :as audio] [kami.app-daw.bench :as bench]
                               [html.core :as html]
                               [kami.app-daw.asset-sources :as asset-sources]
                               ["fflate" :refer [zipSync unzipSync strToU8 strFromU8]]))
@@ -14,6 +14,8 @@
   (html/html [:meta {:name "kotoba:app-shell" :content "kami-daw single-screen liquid-glass"}]
              [:noscript "KAMI DAW requires JavaScript for audio transport and rendering."]))
 (defonce state (r/atom {:project sample :history daw/empty-history :history-replaying? false :clip-drag nil :clip-preview nil :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :analyzing? false :loudness-report nil :normalize-export? true :target-lufs -14 :true-peak-ceiling-db -1 :stem-exporting nil :stem-bundle-exporting? false :directory-searching? false :directory-result nil :recording nil :recording-loop nil :recording-cancelled? false :input-monitoring? false :input-monitor-active? false :input-monitor-gain 0.35 :input-monitor-db -96 :recording-error nil :plugin-package-status nil :project-error nil :recovered? false :punch-length-ticks 960 :loop-takes 3 :mackie-bank 0 :mackie-profile :auto :mackie-active-profile :generic-mcu :mackie-touched-strips #{} :buffers {} :assets {} :network-source-status "Not loaded" :network-sources []}))
+(defonce bench-run (r/atom (bench/initial-run)))
+(defn bench-panel [] (let [run @bench-run actor (some #(when (= (:id %) (:actor-id run)) %) bench/actors)] [:aside.bench-panel [:strong "User test loop"] [:select {:value (:actor-id run) :on-change #(swap! bench-run assoc :actor-id (.. % -target -value) :task-index 0)}] (for [{:keys [id label]} bench/actors] ^{:key id} [:option {:value id} label]) [:p (str "Task " (inc (:task-index run)) "/" (count (:tasks actor)) ": " (bench/current-task run))] [:button {:on-click #(bench/record! bench-run :observation {:task (bench/current-task @bench-run)})} "Log observation"] [:button {:on-click #(swap! bench-run update :task-index #(min (dec (count (:tasks actor))) (inc %)))} "Next task"] [:textarea {:placeholder "Participant feedback" :on-blur #(bench/record! bench-run :feedback {:text (.. % -target -value)})}]]))
 (defonce meter-timer (atom nil))
 (defonce pending-plugin-package (r/atom nil))
 (defonce publisher-rotation-drafts (r/atom {}))
@@ -791,7 +793,7 @@
     (swap! state update :project daw/edit-clip id (assoc edit k value))))
 (defn app [] (let [{:keys [playing? tick]} @state project (or (:clip-preview @state) (:project @state)) total (max 3840 (daw/duration-ticks project))
                     missing (daw/missing-asset-ids project (keys (:buffers @state)))]
- [:main [:header.liquid-glass__toolbar [:div [:small "KOTOBA-LANG / MUSIC"] [:h1 "KAMI DAW"]]
+ [:main [:header.liquid-glass__toolbar [:div [:small "KOTOBA-LANG / MUSIC"] [:h1 "KAMI DAW"]] [bench-panel]
    [:div.transport [:button.primary {:on-click toggle-play!} (if playing? "■ Stop" "▶ Play audio")]
     [:span (str "Tick " tick)] [:span (str (.toFixed (daw/tick->seconds project tick) 2) " s")]
     [:meter {:min -60 :max 0 :value (max -60 (:meter-db @state)) :title (str (.toFixed (:meter-db @state) 1) " dBFS")}]]]
