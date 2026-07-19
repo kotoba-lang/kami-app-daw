@@ -1,5 +1,7 @@
 # KAMI DAW
 
+The visual shell uses the generated `public/liquid-glass.css` artifact from `kotoba-lang/liquid-glass-ui`; that artifact is generated from `kotoba-lang/css` EDN rules. The app remains a single-screen workspace and keeps its media/render state independent from the visual material.
+
 Immersive project authority now selects stereo, 5.1 or 7.1.4 beds, validates normalized audio-object coordinates and emits ADM metadata identified as ITU-R BS.2076-3. This is an interoperable metadata boundary, not Dolby Atmos certification or a proprietary renderer. Distributed publisher revocation lists verify their exact signed payload with WebCrypto ECDSA P-256 and require the signing-key fingerprint already held in the trust store. Accepted lists are retained per publisher with monotonic versions, issued/next-update windows and rollback rejection; a current-list match removes trust and disables that publisher's plugins.
 
 Trusted publishers support compare-and-swap key rotation: the currently trusted fingerprint must match before replacement, and every retired fingerprint is retained with its rotation timestamp. Packages signed by the new key become trusted immediately while stale or conflicting rotation attempts leave project authority unchanged.

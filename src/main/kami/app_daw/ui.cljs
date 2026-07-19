@@ -787,7 +787,7 @@
     (swap! state update :project daw/edit-clip id (assoc edit k value))))
 (defn app [] (let [{:keys [playing? tick]} @state project (or (:clip-preview @state) (:project @state)) total (max 3840 (daw/duration-ticks project))
                     missing (daw/missing-asset-ids project (keys (:buffers @state)))]
- [:main [:header [:div [:small "KOTOBA-LANG / MUSIC"] [:h1 "KAMI DAW"]]
+ [:main [:header.liquid-glass__toolbar [:div [:small "KOTOBA-LANG / MUSIC"] [:h1 "KAMI DAW"]]
    [:div.transport [:button.primary {:on-click toggle-play!} (if playing? "■ Stop" "▶ Play audio")]
     [:span (str "Tick " tick)] [:span (str (.toFixed (daw/tick->seconds project tick) 2) " s")]
     [:meter {:min -60 :max 0 :value (max -60 (:meter-db @state)) :title (str (.toFixed (:meter-db @state) 1) " dBFS")}]]]
