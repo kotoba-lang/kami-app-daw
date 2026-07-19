@@ -1,5 +1,6 @@
 (ns kami.app-daw.ui (:require [reagent.core :as r] [reagent.dom.client :as rdom] [cljs.reader :as reader]
                               [kami.app-daw.core :as daw] [kami.app-daw.audio :as audio]
+                              [kami.app-daw.asset-sources :as asset-sources]
                               ["fflate" :refer [zipSync unzipSync strToU8 strFromU8]]))
 (def sample (daw/project {:project/id "demo-song" :project/name "夜明けの波形"
  :project/tracks [{:track/id "drums" :track/name "Drums" :track/color "#ff8a65" :track/gain 0.82
@@ -8,7 +9,7 @@
                    :track/clips [{:clip/id "chords" :clip/name "Chords" :clip/start-tick 960 :clip/length-ticks 2880}]}
                   {:track/id "voice" :track/name "Voice" :track/color "#c4b5fd" :track/gain 0.9
                    :track/clips [{:clip/id "hook" :clip/name "Hook" :clip/start-tick 2400 :clip/length-ticks 1440}]}]}))
-(defonce state (r/atom {:project sample :history daw/empty-history :history-replaying? false :clip-drag nil :clip-preview nil :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :analyzing? false :loudness-report nil :normalize-export? true :target-lufs -14 :true-peak-ceiling-db -1 :stem-exporting nil :stem-bundle-exporting? false :directory-searching? false :directory-result nil :recording nil :recording-loop nil :recording-cancelled? false :input-monitoring? false :input-monitor-active? false :input-monitor-gain 0.35 :input-monitor-db -96 :recording-error nil :plugin-package-status nil :project-error nil :recovered? false :punch-length-ticks 960 :loop-takes 3 :mackie-bank 0 :mackie-profile :auto :mackie-active-profile :generic-mcu :mackie-touched-strips #{} :buffers {} :assets {}}))
+(defonce state (r/atom {:project sample :history daw/empty-history :history-replaying? false :clip-drag nil :clip-preview nil :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :analyzing? false :loudness-report nil :normalize-export? true :target-lufs -14 :true-peak-ceiling-db -1 :stem-exporting nil :stem-bundle-exporting? false :directory-searching? false :directory-result nil :recording nil :recording-loop nil :recording-cancelled? false :input-monitoring? false :input-monitor-active? false :input-monitor-gain 0.35 :input-monitor-db -96 :recording-error nil :plugin-package-status nil :project-error nil :recovered? false :punch-length-ticks 960 :loop-takes 3 :mackie-bank 0 :mackie-profile :auto :mackie-active-profile :generic-mcu :mackie-touched-strips #{} :buffers {} :assets {} :network-source-status "Not loaded" :network-sources []}))
 (defonce meter-timer (atom nil))
 (defonce pending-plugin-package (r/atom nil))
 (defonce publisher-rotation-drafts (r/atom {}))
@@ -20,6 +21,19 @@
 (defonce mackie-time-slot (atom nil))
 (defonce shortcuts-installed? (atom false))
 (declare stop-meter! start-playback! stop-playback! sha256-file!)
+(declare import-track!)
+(defn load-network-sources! []
+  (swap! state assoc :network-source-status "Loading network-isekai and kotobase.net…")
+  (-> (asset-sources/load-all!)
+      (.then (fn [sources] (swap! state assoc :network-sources (vec (array-seq sources))
+                                   :network-source-status (str "Connected: " (count (array-seq sources)) " sources"))))
+      (.catch #(swap! state assoc :network-source-status (str "Partial/offline: " (.-message %))))))
+(defn import-remote-audio! [track item]
+  (-> (js/fetch (:asset/uri item))
+      (.then (fn [r] (if (.-ok r) (.blob r) (throw (js/Error. (str "asset HTTP " (.-status r)))))))
+      (.then (fn [blob] (let [file (js/File. #js [blob] (or (:asset/name item) "network-asset") #js {:type (or (:asset/mime item) (.-type blob) "audio/wav")})]
+                          (import-track! track #js {:target #js {:files #js [file]}}))))
+      (.catch #(swap! state assoc :project-error (str "Remote audio import failed: " (.-message %))))))
 (defn plugin-package [raw]
   (let [parameters (into {}
                          (map (fn [[parameter descriptor]]
@@ -777,7 +791,13 @@
    [:div.transport [:button.primary {:on-click toggle-play!} (if playing? "■ Stop" "▶ Play audio")]
     [:span (str "Tick " tick)] [:span (str (.toFixed (daw/tick->seconds project tick) 2) " s")]
     [:meter {:min -60 :max 0 :value (max -60 (:meter-db @state)) :title (str (.toFixed (:meter-db @state) 1) " dBFS")}]]]
-  [:section.meta [:label "Project" [:input {:value (:project/name project) :on-change #(swap! state assoc-in [:project :project/name] (.. % -target -value))}]]
+ [:section.meta [:label "Project" [:input {:value (:project/name project) :on-change #(swap! state assoc-in [:project :project/name] (.. % -target -value))}]]
+   [:button {:aria-label "Load network asset sources" :on-click load-network-sources!} "Load network assets"]
+   [:output {:aria-label "Network asset source status"} (:network-source-status @state)]
+   (for [source (:network-sources @state) item (take 4 (:source/items source)) track (take 1 (:project/tracks project))]
+     ^{:key (str (:source/id source) (:asset/id item))}
+     [:button {:aria-label (str "Import remote audio " (:asset/name item)) :on-click #(import-remote-audio! track item)}
+      (str "Import " (:asset/name item))])
    [:label "Tempo" [:input {:type "number" :value (:project/bpm project) :on-change #(swap! state assoc-in [:project :project/bpm] (js/parseInt (.. % -target -value)))}]]
    [:label "Immersive layout"
     [:select {:value (name (get-in project [:project/immersive :immersive/layout] :stereo))
