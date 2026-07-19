@@ -66,6 +66,45 @@
                               (base64-bytes (:package/signature package))
                               (.encode (js/TextEncoder.) (:package/source-sha256 package)))))))
         (.catch (fn [_] false)))))
+(defn verify-revocation-list! [raw]
+  (let [publisher-id (get raw "publisherId") payload (get raw "signedPayload")
+        public-key (get raw "publisherKey") signature (get raw "signature")
+        trusted-fingerprint (get-in @state [:project :project/trusted-publishers publisher-id :publisher/fingerprint])
+        key-json (js/JSON.stringify (clj->js public-key))]
+    (-> (js/Promise.all
+         #js [(.importKey (.-subtle js/crypto) "jwk" (clj->js public-key)
+                          #js {:name "ECDSA" :namedCurve "P-256"} false #js ["verify"])
+              (sha256-text! key-json)])
+        (.then (fn [values]
+                 (if (not= trusted-fingerprint (aget values 1)) false
+                     (-> (.verify (.-subtle js/crypto) #js {:name "ECDSA" :hash "SHA-256"} (aget values 0)
+                                  (base64-bytes signature) (.encode (js/TextEncoder.) payload))
+                         (.then (fn [valid?]
+                                  (when valid?
+                                    (let [body (js->clj (js/JSON.parse payload))]
+                                      (when (= publisher-id (get body "publisherId"))
+                                        {:publisher-id publisher-id
+                                         :list {:revocation/version (get body "version")
+                                                :revocation/issued-at (get body "issuedAt")
+                                                :revocation/next-update (get body "nextUpdate")
+                                                :revocation/fingerprints (vec (get body "fingerprints"))
+                                                :revocation/signature signature}})))))))))
+        (.catch (fn [_] false)))))
+(defn import-revocation-list! [file]
+  (when file
+    (-> (.text file)
+        (.then #(verify-revocation-list! (js->clj (js/JSON.parse %))))
+        (.then (fn [verified]
+                 (if-not verified
+                   (swap! state assoc :revocation-status "Revocation list rejected: signature, key, or publisher mismatch")
+                   (let [before (get-in @state [:project :project/revocation-lists (:publisher-id verified) :revocation/version] 0)]
+                     (swap! state update :project daw/apply-revocation-list (:publisher-id verified) (:list verified)
+                            (long (/ (.now js/Date) 1000)))
+                     (let [after (get-in @state [:project :project/revocation-lists (:publisher-id verified) :revocation/version] 0)]
+                       (swap! state assoc :revocation-status
+                              (if (> after before) (str "Verified revocation list v" after)
+                                  "Revocation list rejected: stale, rollback, or expired")))))))
+        (.catch #(swap! state assoc :revocation-status (str "Revocation list error: " (.-message %)))))))
 (defn install-plugin-package! [package]
   (let [plugin-id (str (:package/id package) "-" (inc (count (get-in @state [:project :project/plugins]))))]
     (swap! state update :project daw/add-third-party-plugin plugin-id package)
@@ -740,6 +779,19 @@
     [:meter {:min -60 :max 0 :value (max -60 (:meter-db @state)) :title (str (.toFixed (:meter-db @state) 1) " dBFS")}]]]
   [:section.meta [:label "Project" [:input {:value (:project/name project) :on-change #(swap! state assoc-in [:project :project/name] (.. % -target -value))}]]
    [:label "Tempo" [:input {:type "number" :value (:project/bpm project) :on-change #(swap! state assoc-in [:project :project/bpm] (js/parseInt (.. % -target -value)))}]]
+   [:label "Immersive layout"
+    [:select {:value (name (get-in project [:project/immersive :immersive/layout] :stereo))
+              :aria-label "Immersive output layout"
+              :on-change #(swap! state update :project daw/set-immersive-layout (keyword (.. % -target -value)))}
+     [:option {:value "stereo"} "Stereo"] [:option {:value "surround-5.1"} "5.1 bed"]
+     [:option {:value "surround-7.1.4"} "7.1.4 bed + objects"]]]
+   [:button {:aria-label "Export ADM metadata"
+             :on-click #(download-file! (js/Blob. #js [(daw/adm-xml project)] #js {:type "application/xml"})
+                                        "kami-adm.xml")}
+    "Export ADM metadata"]
+   [:output {:aria-label "Immersive production status"}
+    (str (count (daw/immersive-layout-channels (get-in project [:project/immersive :immersive/layout] :stereo)))
+         " bed channels • ADM metadata • certified Atmos renderer external")]
    [:button {:on-click connect-midi! :aria-label "Connect MIDI controller"} "Connect MIDI"]
    [:label "Surface profile"
     [:select {:value (name (:mackie-profile @state)) :aria-label "Mackie hardware profile"
@@ -789,6 +841,11 @@
    [:label "Third-party AudioWorklet package"
     [:input {:type "file" :accept ".json,application/json" :aria-label "Import third-party AudioWorklet package"
              :on-change #(import-plugin-package! (aget (.. % -target -files) 0))}]]
+   [:label "Signed publisher revocation list"
+    [:input {:type "file" :accept ".json,application/json" :aria-label "Import signed publisher revocation list"
+             :on-change #(import-revocation-list! (aget (.. % -target -files) 0))}]]
+   (when-let [status (:revocation-status @state)]
+     [:small {:aria-label "Revocation list status"} status])
    (when-let [status (:plugin-package-status @state)]
      [:small {:aria-label "Plugin package status"} status])
    (when-let [package @pending-plugin-package]

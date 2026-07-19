@@ -1,5 +1,7 @@
 # KAMI DAW
 
+Immersive project authority now selects stereo, 5.1 or 7.1.4 beds, validates normalized audio-object coordinates and emits ADM metadata identified as ITU-R BS.2076-3. This is an interoperable metadata boundary, not Dolby Atmos certification or a proprietary renderer. Distributed publisher revocation lists verify their exact signed payload with WebCrypto ECDSA P-256 and require the signing-key fingerprint already held in the trust store. Accepted lists are retained per publisher with monotonic versions, issued/next-update windows and rollback rejection; a current-list match removes trust and disables that publisher's plugins.
+
 Trusted publishers support compare-and-swap key rotation: the currently trusted fingerprint must match before replacement, and every retired fingerprint is retained with its rotation timestamp. Packages signed by the new key become trusted immediately while stale or conflicting rotation attempts leave project authority unchanged.
 
 Signed third-party packages use ECDSA P-256 over the verified source digest. The browser recomputes the publisher-key SHA-256 fingerprint, verifies the signature with WebCrypto, holds unknown publishers pending explicit trust, and persists the trust decision. Revocation removes the publisher and immediately disables every associated plugin.

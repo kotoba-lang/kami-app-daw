@@ -414,3 +414,25 @@
     (is (nil? (daw/accept-package packaged (assoc-in manifest [:package/media "audio:t" :media/sha256]
                                                       (apply str (repeat 64 "b"))) #{"media/0"})))
     (is (= "media/7" (daw/package-entry-name 7)))))
+(deftest immersive-bed-object-and-adm-contract
+  (let [project (-> p (daw/set-immersive-layout :surround-7.1.4)
+                    (daw/add-audio-object {:object/id "dialogue" :object/name "Dialogue & VO"
+                                           :object/track-id "t"
+                                           :object/position {:position/x 0.25 :position/y 0.5 :position/z 0.8}}))
+        xml (daw/adm-xml project)]
+    (is (= 12 (count (daw/immersive-layout-channels :surround-7.1.4))))
+    (is (= 1 (count (get-in project [:project/immersive :immersive/objects]))))
+    (is (.contains xml "ITU-R_BS.2076-3"))
+    (is (.contains xml "Dialogue &amp; VO"))
+    (is (= p (daw/add-audio-object p {:object/id "bad" :object/name "Bad"
+                                      :object/position {:position/x 2 :position/y 0 :position/z 0}})))))
+(deftest distributed-revocation-list-is-monotonic-and-expiring
+  (let [fingerprint (apply str (repeat 64 "a"))
+        trusted (daw/trust-plugin-publisher p "vendor" fingerprint "Vendor")
+        list-v1 {:revocation/version 1 :revocation/issued-at 100 :revocation/next-update 300
+                 :revocation/fingerprints [fingerprint] :revocation/signature "ecdsa-signature"}
+        revoked (daw/apply-revocation-list trusted "vendor" list-v1 200)]
+    (is (nil? (get-in revoked [:project/trusted-publishers "vendor"])))
+    (is (= 1 (get-in revoked [:project/revocation-lists "vendor" :revocation/version])))
+    (is (= revoked (daw/apply-revocation-list revoked "vendor" (assoc list-v1 :revocation/version 0) 200)))
+    (is (= trusted (daw/apply-revocation-list trusted "vendor" list-v1 400)))))

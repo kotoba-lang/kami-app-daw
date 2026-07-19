@@ -22,7 +22,8 @@
                            :project/buses [{:bus/id "master" :bus/name "Master" :bus/gain 1.0}]
                            :project/master-effects {:filter/cutoff-hz 4200.0 :delay/time-sec 0.12 :delay/feedback 0.28
                                                     :effect/automation {}}
-                           :project/plugins [] :project/trusted-publishers {}
+                           :project/plugins [] :project/trusted-publishers {} :project/revocation-lists {}
+                           :project/immersive {:immersive/layout :stereo :immersive/beds [] :immersive/objects []}
                            :project/midi-mappings []
                            :project/assets {} :project/tracks []} m))
 (defn register-asset
@@ -184,6 +185,46 @@
                        (if (= publisher-id (:plugin/publisher-id plugin))
                          (assoc plugin :plugin/enabled? false :plugin/trust :revoked)
                          plugin)) %))))
+(def immersive-layout-channels {:stereo ["L" "R"] :surround-5.1 ["L" "R" "C" "LFE" "Ls" "Rs"]
+                                :surround-7.1.4 ["L" "R" "C" "LFE" "Lss" "Rss" "Lrs" "Rrs" "Ltf" "Rtf" "Ltr" "Rtr"]})
+(defn set-immersive-layout [p layout]
+  (if (contains? immersive-layout-channels layout) (assoc-in p [:project/immersive :immersive/layout] layout) p))
+(defn add-audio-object [p object]
+  (if (and (string? (:object/id object)) (not (str/blank? (:object/id object)))
+           (every? #(and (number? %) (<= -1 % 1))
+                   ((juxt :position/x :position/y :position/z) (:object/position object))))
+    (update-in p [:project/immersive :immersive/objects] conj object) p))
+(defn xml-escape [s] (-> (str s) (str/replace "&" "&amp;") (str/replace "<" "&lt;") (str/replace "\"" "&quot;")))
+(defn adm-xml [p]
+  (let [immersive (:project/immersive p) layout (:immersive/layout immersive)
+        channels (get immersive-layout-channels layout)]
+    (str "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+         "<audioFormatExtended version=\"ITU-R_BS.2076-3\">\n"
+         "  <audioProgramme audioProgrammeID=\"APR_1001\" audioProgrammeName=\"Kami immersive master\">\n"
+         "    <audioContentIDRef>ACO_1001</audioContentIDRef>\n  </audioProgramme>\n"
+         "  <audioContent audioContentID=\"ACO_1001\" audioContentName=\"Main\">\n"
+         (apply str (map-indexed (fn [i _] (str "    <audioObjectIDRef>AO_" (+ 1001 i) "</audioObjectIDRef>\n"))
+                                 (concat channels (:immersive/objects immersive))))
+         "  </audioContent>\n"
+         (apply str (map-indexed (fn [i channel] (str "  <audioObject audioObjectID=\"AO_" (+ 1001 i)
+                                                      "\" audioObjectName=\"Bed " (xml-escape channel) "\"/>\n")) channels))
+         (apply str (map-indexed (fn [i object] (let [{:position/keys [x y z]} (:object/position object)]
+                    (str "  <audioObject audioObjectID=\"AO_" (+ 1001 (count channels) i) "\" audioObjectName=\""
+                         (xml-escape (:object/name object)) "\"><position x=\"" x "\" y=\"" y "\" z=\"" z "\"/></audioObject>\n")))
+                    (:immersive/objects immersive)))
+         "</audioFormatExtended>\n")))
+(defn apply-revocation-list [p publisher-id revocations now]
+  (let [current (get-in p [:project/revocation-lists publisher-id])
+        version (:revocation/version revocations)
+        revoked (set (:revocation/fingerprints revocations))
+        valid? (and (pos-int? version) (> version (or (:revocation/version current) 0))
+                    (number? (:revocation/issued-at revocations)) (<= (:revocation/issued-at revocations) now)
+                    (number? (:revocation/next-update revocations)) (> (:revocation/next-update revocations) now)
+                    (string? (:revocation/signature revocations)) (not (str/blank? (:revocation/signature revocations))))]
+    (if-not valid? p
+      (let [p (assoc-in p [:project/revocation-lists publisher-id] revocations)
+            fingerprint (get-in p [:project/trusted-publishers publisher-id :publisher/fingerprint])]
+        (if (contains? revoked fingerprint) (revoke-plugin-publisher p publisher-id) p)))))
 (defn rotate-plugin-publisher-key [p publisher-id current-fingerprint new-fingerprint rotated-at]
   (let [publisher (get-in p [:project/trusted-publishers publisher-id])]
     (if (and publisher (= current-fingerprint (:publisher/fingerprint publisher))
