@@ -12,8 +12,11 @@
     ;; own dark palette. The accent below is the only hex the app may state.
     (is (theme/hex-free? theme/app-css)
         (str "leaked: " (re-find #"#[0-9a-fA-F]{3,8}" theme/app-css))))
-  (testing "no font-family: type comes from the HIG text styles"
-    (is (not (str/includes? theme/app-css "font-family"))))
+  (testing "no hand-written font stack: type comes from the HIG tokens"
+    ;; What the old style.css had, and what this forbids, is
+    ;; `font-family:Inter,system-ui,sans-serif`. A token reference is fine.
+    (doseq [[_ v] (re-seq #"font-family\s*:\s*([^;}]+)" theme/app-css)]
+      (is (str/includes? v "var(--hig-font-") (str "hand-written font stack: " v))))
   (testing "no hardcoded color-scheme: appearance comes from the theme map"
     (is (not (str/includes? theme/app-css "color-scheme"))))
   (testing "every color reference is a token"
