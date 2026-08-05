@@ -1,7 +1,13 @@
 {:paths ["src/main" "resources"]
  :deps {org.clojure/clojure {:mvn/version "1.12.0"}
         io.github.kotoba-lang/html {:git/url "https://github.com/kotoba-lang/html.git"
-                                    :git/sha "44fe37a9120cb7753b974d921c7fc87448dace45"}}
+                                    :git/sha "44fe37a9120cb7753b974d921c7fc87448dace45"}
+        ;; kotoba-ui — kotoba-lang default design system, single entry
+        ;; (skill `kotoba-uiux` / ADR-2607122200). Replaces the frozen 39 KB
+        ;; public/liquid-glass.css artifact (which carried the glass material
+        ;; but zero --hig-* tokens) and the hand-written public/style.css.
+        io.github.kotoba-lang/kotoba-ui {:git/url "https://github.com/kotoba-lang/kotoba-ui.git"
+                                         :git/sha "ccb4544edc8d9bf439a85920fce0d4986a7bff62"}}
  :aliases {:cljs {:extra-deps {org.clojure/clojurescript {:mvn/version "1.11.132"}
                                 reagent/reagent {:mvn/version "1.2.0"}
                                 thheller/shadow-cljs {:mvn/version "2.28.20"}}}
