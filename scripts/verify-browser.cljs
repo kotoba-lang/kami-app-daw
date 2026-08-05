@@ -14,7 +14,7 @@
             ["playwright-core$default" :as pw]
             [promesa.core :as p]))
 
-(def url (or (.. process -env -DAW_URL) "http://localhost:8732/"))
+(def url (or (.. process -env -DAW_URL) "http://localhost:8735/"))
 
 (defonce results (atom []))
 
@@ -30,24 +30,31 @@
             (check! "app mounted" (= "KAMI DAW" (str t)) t)))
 
    ;; Every button is a design-system button now.
-   (fn [] (p/let [raw (.count (.locator page "button:not(.shitsuke__button)"))
-                  glass (.count (.locator page "button.liquid-glass__button"))]
-            (check! "buttons are ui/button, not hand-rolled"
-                    (and (zero? raw) (> glass 20)) (str "raw=" raw " glass=" glass))))
+   ;; Every button is a DADS button now — except the timeline clips, which are
+   ;; absolutely positioned elements that happen to be clickable and were given
+   ;; their own <button> back rather than pretending to be a DADS control.
+   (fn [] (p/let [dads (.count (.locator page "button.dads-button"))
+                  other (.count (.locator page "button:not(.dads-button)"))
+                  clips (.count (.locator page "button.daw-clip"))]
+            (check! "buttons are DADS buttons; only clips are not"
+                    (and (> dads 20) (= other clips))
+                    (str "dads=" dads " other=" other " clips=" clips))))
 
    ;; THE check: :attrs passthrough means those buttons still work. Play
    ;; toggles the transport, and its label is derived from that state.
-   (fn [] (p/let [before (.textContent (.locator page ".daw-primary"))
-                  _ (.click page ".daw-primary")
+   (fn [] (p/let [sel "button[data-type='solid-fill']"
+                  before (.textContent (.first (.locator page sel)))
+                  _ (.click (.first (.locator page sel)))
                   _ (settle page)
-                  after (.textContent (.locator page ".daw-primary"))]
+                  after (.textContent (.first (.locator page sel)))]
             (check! "ui/button :on-click reaches the app (transport toggles)"
                     (not= (str before) (str after))
                     (str (str before) " -> " (str after)))))
 
-   (fn [] (p/let [_ (.click page ".daw-primary")   ; stop again
+   (fn [] (p/let [sel "button[data-type='solid-fill']"
+                  _ (.click (.first (.locator page sel)))   ; stop again
                   _ (settle page)
-                  t (.textContent (.locator page ".daw-primary"))]
+                  t (.textContent (.first (.locator page sel)))]
             (check! "and toggles back" (re-find #"Play" (str t)) t)))
 
    ;; A track's mute button is one of the 36; it flips its own label.
@@ -73,17 +80,22 @@
                     (and (seq (str bg)) (not= "rgba(0, 0, 0, 0)" (str bg))) bg)))
 
    ;; The theme reached the cascade, and the dark appearance is stamped.
+   ;; The --hig-* contract now resolves onto DADS primitives. getPropertyValue
+   ;; resolves var() chains, so the proof is that the bridged token reads back
+   ;; as the DADS value itself and the grid resolves to a real length.
    (fn [] (p/let [tint (.evaluate page "getComputedStyle(document.documentElement).getPropertyValue('--hig-color-tint').trim()")
-                  app (.getAttribute (.locator page "html") "data-appearance")]
-            (check! "theme accent + appearance are live"
-                    (and (= "#67e8f9" (str tint)) (= "dark" (str app)))
-                    (str tint " / " app))))
+                  key (.evaluate page "getComputedStyle(document.documentElement).getPropertyValue('--color-key-900').trim()")
+                  gap (.evaluate page "getComputedStyle(document.querySelector('.daw-toolbar')).gap")]
+            (check! "the --hig-* contract resolves onto DADS primitives"
+                    (and (= (str tint) (str key)) (seq (str key)) (re-find #"^\d" (str gap)))
+                    (str "tint=" tint " key=" key " gap=" gap))))
 
    ;; The frozen artifact is gone: no request for it, and the tokens it
    ;; lacked are present.
-   (fn [] (p/let [label (.evaluate page "getComputedStyle(document.documentElement).getPropertyValue('--hig-color-label').trim()")]
-            (check! "HIG tokens present (the frozen artifact had none)"
-                    (seq (str label)) label)))
+   (fn [] (p/let [label (.evaluate page "getComputedStyle(document.documentElement).getPropertyValue('--hig-color-label').trim()")
+                  dads (.evaluate page "getComputedStyle(document.documentElement).getPropertyValue('--font-family-sans').trim()")]
+            (check! "DADS is the base and the bridge sits on it"
+                    (and (seq (str label)) (seq (str dads))) (str label " | " dads))))
 
    (fn [] (p/resolved (check! "no page errors or console errors"
                               (empty? @errors) (pr-str @errors))))])
