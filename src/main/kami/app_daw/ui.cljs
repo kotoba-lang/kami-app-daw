@@ -13,7 +13,7 @@
                   {:track/id "voice" :track/name "Voice" :track/color (theme/track-color 2) :track/gain 0.9
  :track/clips [{:clip/id "hook" :clip/name "Hook" :clip/start-tick 2400 :clip/length-ticks 1440}]}]}))
 (def kotoba-html-contract
-  (html/html [:meta {:name "kotoba:app-shell" :content "kami-daw single-screen liquid-glass"}]
+  (html/html [:meta {:name "kotoba:app-shell" :content "kami-daw single-screen dads"}]
              [:noscript "KAMI DAW requires JavaScript for audio transport and rendering."]))
 (defonce state (r/atom {:project sample :history daw/empty-history :history-replaying? false :clip-drag nil :clip-preview nil :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :analyzing? false :loudness-report nil :normalize-export? true :target-lufs -14 :true-peak-ceiling-db -1 :stem-exporting nil :stem-bundle-exporting? false :directory-searching? false :directory-result nil :recording nil :recording-loop nil :recording-cancelled? false :input-monitoring? false :input-monitor-active? false :input-monitor-gain 0.35 :input-monitor-db -96 :recording-error nil :plugin-package-status nil :project-error nil :recovered? false :punch-length-ticks 960 :loop-takes 3 :mackie-bank 0 :mackie-profile :auto :mackie-active-profile :generic-mcu :mackie-touched-strips #{} :buffers {} :assets {} :network-source-status "Not loaded" :network-sources []}))
 (defonce bench-run (r/atom (or (bench/restore) (bench/initial-run))))

@@ -1,20 +1,18 @@
 {
-  // Static host for KAMI DAW at daw.gftd.ai.
+  // KAMI DAW at daw.itonami.cloud.
   //
-  // Assets-only: no `main`, because there is nothing for a Worker to do. The
-  // page is a build artifact (scripts/gen-page.cljs -> public/index.html) and
-  // the app is a cljs bundle; projects live in the browser (localStorage,
-  // IndexedDB, .kami.zip files the user saves). No D1, no R2, no secrets.
+  // A SUBDOMAIN, not a path. itonami.cloud's apex is a Cloudflare Pages
+  // project (`cloud-itonami`, the operator cockpit) bound as a custom domain,
+  // and a Pages custom domain takes the whole hostname — a Worker route for
+  // `itonami.cloud/daw*` registers fine and never fires (measured on the genko
+  // route: it was the only route on the zone and the cockpit still answered).
+  // Subdomains are what this zone already does for Workers anyway:
+  // hooks./app./mcp.itonami.cloud are all custom domains.
   //
-  // GitHub Pages was the previous host, but Actions are disabled org-wide
-  // (ADR-2607300900), so that workflow no longer runs and the Pages site
-  // serves whatever was built before the sweep.
-  //
-  // Deploy:
-  //   npx shadow-cljs release app && npm run page
-  //   npx wrangler deploy -c deploy/wrangler.jsonc
-  "name": "kami-app-daw",
+  // Assets-only — no `main`. The page is a build artifact and the app is a
+  // cljs bundle; projects live in the browser. No D1, no R2, no secrets.
+  "name": "itonami-daw",
   "compatibility_date": "2025-03-17",
   "assets": { "directory": "../public" },
-  "routes": [{ "pattern": "daw.gftd.ai/*", "zone_name": "gftd.ai" }]
+  "routes": [{ "pattern": "daw.itonami.cloud", "custom_domain": true }]
 }
