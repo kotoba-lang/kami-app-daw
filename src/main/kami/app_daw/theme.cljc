@@ -81,6 +81,14 @@
    ".daw-primary{background:var(--hig-color-tint);color:var(--hig-color-system-background);"
    "font-weight:700}\n"
    ".daw-toolbar h1{margin:0;font-size:var(--hig-text-title3-font-size)}\n"
+   ;; Transport readouts: adjacent numbers need a gap, or "Tick 1440" and
+   ;; "1.50 s" read as one number.
+   ".daw-readout{color:var(--hig-color-secondary-label);white-space:nowrap;"
+   "margin-left:var(--hig-spacing-3)}\n"
+   ;; The user-test aside, now a row of its own below the toolbar.
+   ".bench-panel{display:flex;align-items:center;flex-wrap:wrap;"
+   "gap:var(--hig-spacing-3);padding:var(--hig-spacing-3) var(--hig-spacing-content-margin);"
+   "border-bottom:var(--hig-hairline) solid var(--hig-color-separator)}\n"
    ;; --- meta rows ----------------------------------------------------------
    ".daw-meta{display:flex;align-items:center;gap:var(--hig-spacing-3);flex-wrap:wrap;"
    "padding:var(--hig-spacing-4) var(--hig-spacing-content-margin);"

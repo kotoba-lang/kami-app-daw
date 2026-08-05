@@ -794,12 +794,16 @@
                     missing (daw/missing-asset-ids project (keys (:buffers @state)))]
  [:main.daw-main (ui/toolbar
    [[:div [:small.daw-eyebrow "KOTOBA-LANG / MUSIC"] [:h1 "KAMI DAW"]]
-    [bench-panel]
     (ui/spacer)
     (ui/button (if playing? "■ Stop" "▶ Play audio") {:class "daw-primary" :attrs {:on-click toggle-play!}})
-    [:span (str "Tick " tick)] [:span (str (.toFixed (daw/tick->seconds project tick) 2) " s")]
+    [:span.daw-readout (str "Tick " tick)]
+    [:span.daw-readout (str (.toFixed (daw/tick->seconds project tick) 2) " s")]
     [:meter {:min -60 :max 0 :value (max -60 (:meter-db @state)) :title (str (.toFixed (:meter-db @state) 1) " dBFS")}]]
    {:class "daw-toolbar"})
+  ;; The user-test loop is an aside about the session, not a transport
+  ;; control. Inside the toolbar it wrapped to four rows and pushed the
+  ;; timeline below the fold; it belongs next to the other meta rows.
+  [bench-panel]
  [:section.daw-meta [:label "Project" [:input {:value (:project/name project) :on-change #(swap! state assoc-in [:project :project/name] (.. % -target -value))}]]
    (ui/button "Load network assets" {:attrs {:aria-label "Load network asset sources" :on-click load-network-sources!}})
    [:output {:aria-label "Network asset source status"} (:network-source-status @state)]
