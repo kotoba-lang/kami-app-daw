@@ -1,21 +1,23 @@
 (ns kami.app-daw.ui (:require [reagent.core :as r] [reagent.dom.client :as rdom] [cljs.reader :as reader]
                               [kami.app-daw.core :as daw] [kami.app-daw.audio :as audio] [kami.app-daw.bench :as bench]
                               [html.core :as html]
+                              [kotoba-ui.core :as ui]
+                              [kami.app-daw.theme :as theme]
                               [kami.app-daw.asset-sources :as asset-sources]
                               ["fflate" :refer [zipSync unzipSync strToU8 strFromU8]]))
 (def sample (daw/project {:project/id "demo-song" :project/name "夜明けの波形"
- :project/tracks [{:track/id "drums" :track/name "Drums" :track/color "#ff8a65" :track/gain 0.82
+ :project/tracks [{:track/id "drums" :track/name "Drums" :track/color (theme/track-color 0) :track/gain 0.82
                    :track/clips [{:clip/id "beat-a" :clip/name "Beat A" :clip/start-tick 0 :clip/length-ticks 1920}]}
-                  {:track/id "synth" :track/name "Synth" :track/color "#67e8f9" :track/gain 0.68
+                  {:track/id "synth" :track/name "Synth" :track/color (theme/track-color 1) :track/gain 0.68
                    :track/clips [{:clip/id "chords" :clip/name "Chords" :clip/start-tick 960 :clip/length-ticks 2880}]}
-                  {:track/id "voice" :track/name "Voice" :track/color "#c4b5fd" :track/gain 0.9
+                  {:track/id "voice" :track/name "Voice" :track/color (theme/track-color 2) :track/gain 0.9
  :track/clips [{:clip/id "hook" :clip/name "Hook" :clip/start-tick 2400 :clip/length-ticks 1440}]}]}))
 (def kotoba-html-contract
   (html/html [:meta {:name "kotoba:app-shell" :content "kami-daw single-screen liquid-glass"}]
              [:noscript "KAMI DAW requires JavaScript for audio transport and rendering."]))
 (defonce state (r/atom {:project sample :history daw/empty-history :history-replaying? false :clip-drag nil :clip-preview nil :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :analyzing? false :loudness-report nil :normalize-export? true :target-lufs -14 :true-peak-ceiling-db -1 :stem-exporting nil :stem-bundle-exporting? false :directory-searching? false :directory-result nil :recording nil :recording-loop nil :recording-cancelled? false :input-monitoring? false :input-monitor-active? false :input-monitor-gain 0.35 :input-monitor-db -96 :recording-error nil :plugin-package-status nil :project-error nil :recovered? false :punch-length-ticks 960 :loop-takes 3 :mackie-bank 0 :mackie-profile :auto :mackie-active-profile :generic-mcu :mackie-touched-strips #{} :buffers {} :assets {} :network-source-status "Not loaded" :network-sources []}))
 (defonce bench-run (r/atom (or (bench/restore) (bench/initial-run))))
-(defn bench-panel [] (let [run @bench-run actor (bench/actor run)] [:aside.bench-panel {:aria-label "User test actor loop"} [:strong "User test loop"] [:select {:value (:actor-id run) :on-change #(do (swap! bench-run assoc :actor-id (.. % -target -value) :task-index 0) (bench/persist! @bench-run))} (for [{:keys [id label kind]} bench/actors] ^{:key id} [:option {:value id} (str label " • " (name kind))])] [:p (str "Task " (inc (:task-index run)) "/" (count (:tasks actor)) ": " (bench/current-task run))] [:button {:on-click #(bench/record! bench-run :observation {:note "manual observation"})} "Log observation"] [:button {:on-click #(bench/complete-task! bench-run true 0)} "Pass / next task"] [:button {:on-click #(bench/complete-task! bench-run false 1)} "Fail / next task"] [:textarea {:placeholder "Participant feedback" :aria-label "Participant feedback" :on-blur #(bench/feedback! bench-run (.. % -target -value) :friction 0)}] [:button {:on-click #(bench/export! @bench-run)} "Export EDN"] [:small (str "events=" (count (:events run)) " • session=" (:session-id run))]]))
+(defn bench-panel [] (let [run @bench-run actor (bench/actor run)] [:aside.bench-panel {:aria-label "User test actor loop"} [:strong "User test loop"] [:select {:value (:actor-id run) :on-change #(do (swap! bench-run assoc :actor-id (.. % -target -value) :task-index 0) (bench/persist! @bench-run))} (for [{:keys [id label kind]} bench/actors] ^{:key id} [:option {:value id} (str label " • " (name kind))])] [:p (str "Task " (inc (:task-index run)) "/" (count (:tasks actor)) ": " (bench/current-task run))] (ui/button "Log observation" {:attrs {:on-click #(bench/record! bench-run :observation {:note "manual observation"})}}) (ui/button "Pass / next task" {:attrs {:on-click #(bench/complete-task! bench-run true 0)}}) (ui/button "Fail / next task" {:attrs {:on-click #(bench/complete-task! bench-run false 1)}}) [:textarea {:placeholder "Participant feedback" :aria-label "Participant feedback" :on-blur #(bench/feedback! bench-run (.. % -target -value) :friction 0)}] (ui/button "Export EDN" {:attrs {:on-click #(bench/export! @bench-run)}}) [:small (str "events=" (count (:events run)) " • session=" (:session-id run))]]))
 (defonce meter-timer (atom nil))
 (defonce pending-plugin-package (r/atom nil))
 (defonce publisher-rotation-drafts (r/atom {}))
@@ -727,29 +729,27 @@
       (swap! state update :project daw/move-clip (:clip/id clip) tick))))
 (defn track-row [track total]
   (let [asset-id (get-in track [:track/clips 0 :clip/asset-id]) asset (get-in @state [:assets asset-id])]
-  [:div.track-row [:div.track-head [:strong (:track/name track)]
-    [:div.buttons [:button {:on-click #(swap! state update :project daw/set-track (:track/id track) :track/armed? (not (:track/armed? track)))} (if (:track/armed? track) "R ✓" "R")]
-     [:button {:on-click #(swap! state update :project daw/set-track (:track/id track) :track/mute? (not (:track/mute? track)))} (if (:track/mute? track) "M ✓" "M")]
-     [:button {:on-click #(swap! state update :project daw/set-track (:track/id track) :track/solo? (not (:track/solo? track)))} (if (:track/solo? track) "S ✓" "S")]]
+  [:div.daw-track [:div.daw-track-head [:strong (:track/name track)]
+    [:div.daw-row (ui/button (if (:track/armed? track) "R ✓" "R") {:attrs {:on-click #(swap! state update :project daw/set-track (:track/id track) :track/armed? (not (:track/armed? track)))}})
+     (ui/button (if (:track/mute? track) "M ✓" "M") {:attrs {:on-click #(swap! state update :project daw/set-track (:track/id track) :track/mute? (not (:track/mute? track)))}})
+     (ui/button (if (:track/solo? track) "S ✓" "S") {:attrs {:on-click #(swap! state update :project daw/set-track (:track/id track) :track/solo? (not (:track/solo? track)))}})]
     [:input {:type "file" :accept "audio/*" :aria-label (str "Import " (:track/name track) " audio") :on-change #(import-track! track %)}]
     (when asset [:small (:name asset)])
-    [:button {:aria-label (str (if (= (:track/id track) (:recording @state)) "Stop " "Record ") (:track/name track))
+    (ui/button (if (= (:track/id track) (:recording @state)) "■ Stop take" "● Record") {:attrs {:aria-label (str (if (= (:track/id track) (:recording @state)) "Stop " "Record ") (:track/name track))
               :disabled (and (:recording @state) (not= (:track/id track) (:recording @state)))
-              :on-click #(if (= (:track/id track) (:recording @state)) (stop-recording!) (start-recording! (:track/id track)))}
-     (if (= (:track/id track) (:recording @state)) "■ Stop take" "● Record")]
+              :on-click #(if (= (:track/id track) (:recording @state)) (stop-recording!) (start-recording! (:track/id track)))}})
     (for [group (:track/take-lanes track)]
       ^{:key (:comp/id group)}
       [:div.comp-lane [:small (str "Comp • " (count (:comp/takes group)) " takes")]
        (for [take (:comp/takes group)]
          ^{:key (:clip/id take)}
-         [:button {:aria-label (str "Select " (:track/name track) " comp take " (:clip/take-index take))
+         (ui/button (str "T" (:clip/take-index take)) {:attrs {:aria-label (str "Select " (:track/name track) " comp take " (:clip/take-index take))
                    :class (when (= (:clip/id take) (:comp/active-take-id group)) "selected")
-                   :on-click #(swap! state update :project daw/select-comp-take (:track/id track) (:comp/id group) (:clip/id take))}
-          (str "T" (:clip/take-index take))])])
+                   :on-click #(swap! state update :project daw/select-comp-take (:track/id track) (:comp/id group) (:clip/id take))}}))])
     (let [end-tick (daw/duration-ticks (:project @state)) points (:track/gain-automation track)
           start-gain (or (:automation/gain (first points)) (:track/gain track) 1)
           end-gain (or (:automation/gain (last points)) (:track/gain track) 1)]
-      [:div.buttons
+      [:div.daw-row
        [:label "A→" [:input {:type "number" :min 0 :max 2 :step 0.05 :value start-gain :aria-label (str (:track/name track) " automation start") :on-change #(set-automation! track 0 (js/parseFloat (.. % -target -value)))}]]
        [:label "→B" [:input {:type "number" :min 0 :max 2 :step 0.05 :value end-gain :aria-label (str (:track/name track) " automation end") :on-change #(set-automation! track end-tick (js/parseFloat (.. % -target -value)))}]]])
     [:label "Send" [:input {:type "range" :min 0 :max 1 :step 0.05 :value (or (:track/send track) 0)
@@ -758,15 +758,14 @@
     (let [end-tick (daw/duration-ticks (:project @state)) points (:track/send-automation track)
           start-send (or (:automation/send (first points)) (:track/send track) 0)
           end-send (or (:automation/send (last points)) (:track/send track) 0)]
-      [:div.buttons
+      [:div.daw-row
        [:label "Send A→" [:input {:type "number" :min 0 :max 1 :step 0.05 :value start-send
                                     :aria-label (str (:track/name track) " send automation start")
                                     :on-change #(set-send-automation! track 0 (js/parseFloat (.. % -target -value)))}]]
        [:label "→B" [:input {:type "number" :min 0 :max 1 :step 0.05 :value end-send
                                :aria-label (str (:track/name track) " send automation end")
                                :on-change #(set-send-automation! track end-tick (js/parseFloat (.. % -target -value)))}]]])
-    [:button {:on-click #(export-stem! (:track/id track)) :disabled (= (:track/id track) (:stem-exporting @state))}
-     (if (= (:track/id track) (:stem-exporting @state)) "Rendering stem…" "Export stem")]
+    (ui/button (if (= (:track/id track) (:stem-exporting @state)) "Rendering stem…" "Export stem") {:attrs {:on-click #(export-stem! (:track/id track)) :disabled (= (:track/id track) (:stem-exporting @state))}})
     [:input {:type "range" :min 0 :max 1 :step 0.01 :value (:track/gain track)
              :aria-label (str (:track/name track) " gain")
              :on-change #(swap! state update :project daw/set-track (:track/id track) :track/gain (js/parseFloat (.. % -target -value)))}]
@@ -774,16 +773,16 @@
              :aria-label (str (:track/name track) " pan")
              :on-change #(swap! state update :project daw/set-track-pan (:track/id track)
                                 (js/parseFloat (.. % -target -value)))}]]
-   [:div.lane (when asset [:div.waveform {:style {:position "absolute" :inset "8px" :display "flex" :align-items "center" :gap "2px" :opacity 0.45}}
-                              (for [[i peak] (map-indexed vector (:waveform asset))] ^{:key i} [:i {:style {:display "block" :flex 1 :min-height "2px" :height (str (* 90 peak) "%") :background "#dffcff"}}])])
+   [:div.daw-lane (when asset [:div.waveform {:style {:position "absolute" :inset "8px" :display "flex" :align-items "center" :gap "2px" :opacity 0.45}}
+                              (for [[i peak] (map-indexed vector (:waveform asset))] ^{:key i} [:i {:style {:display "block" :flex 1 :min-height "2px" :height (str (* 90 peak) "%") :background "var(--hig-color-tint)"}}])])
     (for [clip (:track/clips track)] ^{:key (:clip/id clip)}
-    [:button.clip {:style {:left (str (* 100 (/ (:clip/start-tick clip) total)) "%")
+    (ui/button (:clip/name clip) {:class "daw-clip" :attrs {:style {:left (str (* 100 (/ (:clip/start-tick clip) total)) "%")
                            :width (str (* 100 (/ (:clip/length-ticks clip) total)) "%")
                            :background (:track/color track)}
                    :aria-label (str "Move " (:clip/name clip)) :aria-keyshortcuts "ArrowLeft ArrowRight Shift+ArrowLeft Shift+ArrowRight"
                    :on-pointer-down #(start-clip-drag! % clip total)
                    :on-key-down #(key-move-clip! % clip)
-                   :on-click #(swap! state assoc :selected (:clip/id clip))} (:clip/name clip)])]]))
+                   :on-click #(swap! state assoc :selected (:clip/id clip))}}))]]))
 (defn selected-clip [project id] (some #(when (= id (:clip/id %)) %) (mapcat :track/clips (:project/tracks project))))
 (defn edit-selected! [k value]
   (let [id (:selected @state) clip (selected-clip (:project @state) id)
@@ -793,17 +792,24 @@
     (swap! state update :project daw/edit-clip id (assoc edit k value))))
 (defn app [] (let [{:keys [playing? tick]} @state project (or (:clip-preview @state) (:project @state)) total (max 3840 (daw/duration-ticks project))
                     missing (daw/missing-asset-ids project (keys (:buffers @state)))]
- [:main [:header.liquid-glass__toolbar [:div [:small "KOTOBA-LANG / MUSIC"] [:h1 "KAMI DAW"]] [bench-panel]
-   [:div.transport [:button.primary {:on-click toggle-play!} (if playing? "■ Stop" "▶ Play audio")]
-    [:span (str "Tick " tick)] [:span (str (.toFixed (daw/tick->seconds project tick) 2) " s")]
-    [:meter {:min -60 :max 0 :value (max -60 (:meter-db @state)) :title (str (.toFixed (:meter-db @state) 1) " dBFS")}]]]
- [:section.meta [:label "Project" [:input {:value (:project/name project) :on-change #(swap! state assoc-in [:project :project/name] (.. % -target -value))}]]
-   [:button {:aria-label "Load network asset sources" :on-click load-network-sources!} "Load network assets"]
+ [:main.daw-main (ui/toolbar
+   [[:div [:small.daw-eyebrow "KOTOBA-LANG / MUSIC"] [:h1 "KAMI DAW"]]
+    (ui/spacer)
+    (ui/button (if playing? "■ Stop" "▶ Play audio") {:class "daw-primary" :attrs {:on-click toggle-play!}})
+    [:span.daw-readout (str "Tick " tick)]
+    [:span.daw-readout (str (.toFixed (daw/tick->seconds project tick) 2) " s")]
+    [:meter {:min -60 :max 0 :value (max -60 (:meter-db @state)) :title (str (.toFixed (:meter-db @state) 1) " dBFS")}]]
+   {:class "daw-toolbar"})
+  ;; The user-test loop is an aside about the session, not a transport
+  ;; control. Inside the toolbar it wrapped to four rows and pushed the
+  ;; timeline below the fold; it belongs next to the other meta rows.
+  [bench-panel]
+ [:section.daw-meta [:label "Project" [:input {:value (:project/name project) :on-change #(swap! state assoc-in [:project :project/name] (.. % -target -value))}]]
+   (ui/button "Load network assets" {:attrs {:aria-label "Load network asset sources" :on-click load-network-sources!}})
    [:output {:aria-label "Network asset source status"} (:network-source-status @state)]
    (for [source (:network-sources @state) item (take 4 (:source/items source)) track (take 1 (:project/tracks project))]
      ^{:key (str (:source/id source) (:asset/id item))}
-     [:button {:aria-label (str "Import remote audio " (:asset/name item)) :on-click #(import-remote-audio! track item)}
-      (str "Import " (:asset/name item))])
+     (ui/button (str "Import " (:asset/name item)) {:attrs {:aria-label (str "Import remote audio " (:asset/name item)) :on-click #(import-remote-audio! track item)}}))
    [:label "Tempo" [:input {:type "number" :value (:project/bpm project) :on-change #(swap! state assoc-in [:project :project/bpm] (js/parseInt (.. % -target -value)))}]]
    [:label "Immersive layout"
     [:select {:value (name (get-in project [:project/immersive :immersive/layout] :stereo))
@@ -811,14 +817,13 @@
               :on-change #(swap! state update :project daw/set-immersive-layout (keyword (.. % -target -value)))}
      [:option {:value "stereo"} "Stereo"] [:option {:value "surround-5.1"} "5.1 bed"]
      [:option {:value "surround-7.1.4"} "7.1.4 bed + objects"]]]
-   [:button {:aria-label "Export ADM metadata"
+   (ui/button "Export ADM metadata" {:attrs {:aria-label "Export ADM metadata"
              :on-click #(download-file! (js/Blob. #js [(daw/adm-xml project)] #js {:type "application/xml"})
-                                        "kami-adm.xml")}
-    "Export ADM metadata"]
+                                        "kami-adm.xml")}})
    [:output {:aria-label "Immersive production status"}
     (str (count (daw/immersive-layout-channels (get-in project [:project/immersive :immersive/layout] :stereo)))
          " bed channels • ADM metadata • certified Atmos renderer external")]
-   [:button {:on-click connect-midi! :aria-label "Connect MIDI controller"} "Connect MIDI"]
+   (ui/button "Connect MIDI" {:attrs {:on-click connect-midi! :aria-label "Connect MIDI controller"}})
    [:label "Surface profile"
     [:select {:value (name (:mackie-profile @state)) :aria-label "Mackie hardware profile"
               :on-change #(let [selected (keyword (.. % -target -value))]
@@ -858,12 +863,10 @@
       [:label "→B" [:input {:type "number" :min minimum :max maximum :step step :value end-value
                               :aria-label (str label " automation end")
                               :on-change #(set-effect-automation! parameter end-tick (js/parseFloat (.. % -target -value)))}]]])
-   [:button {:on-click #(swap! state update :project daw/add-plugin "master-saturator" :kami/saturator)
-             :disabled (some (fn [plugin] (= "master-saturator" (:plugin/id plugin))) (:project/plugins project))}
-    "Add AudioWorklet saturator"]
-   [:button {:on-click #(swap! state update :project daw/add-plugin "master-compressor" :kami/compressor)
-             :disabled (some (fn [plugin] (= "master-compressor" (:plugin/id plugin))) (:project/plugins project))}
-    "Add AudioWorklet compressor"]
+   (ui/button "Add AudioWorklet saturator" {:attrs {:on-click #(swap! state update :project daw/add-plugin "master-saturator" :kami/saturator)
+             :disabled (some (fn [plugin] (= "master-saturator" (:plugin/id plugin))) (:project/plugins project))}})
+   (ui/button "Add AudioWorklet compressor" {:attrs {:on-click #(swap! state update :project daw/add-plugin "master-compressor" :kami/compressor)
+             :disabled (some (fn [plugin] (= "master-compressor" (:plugin/id plugin))) (:project/plugins project))}})
    [:label "Third-party AudioWorklet package"
     [:input {:type "file" :accept ".json,application/json" :aria-label "Import third-party AudioWorklet package"
              :on-change #(import-plugin-package! (aget (.. % -target -files) 0))}]]
@@ -875,9 +878,8 @@
    (when-let [status (:plugin-package-status @state)]
      [:small {:aria-label "Plugin package status"} status])
    (when-let [package @pending-plugin-package]
-     [:button {:aria-label "Trust signed plugin publisher"
-               :on-click trust-pending-plugin-publisher!}
-      (str "Trust " (:package/publisher-name package))])
+     (ui/button (str "Trust " (:package/publisher-name package)) {:attrs {:aria-label "Trust signed plugin publisher"
+               :on-click trust-pending-plugin-publisher!}}))
    (for [[publisher-id publisher] (get-in project [:project/trusted-publishers])]
      ^{:key publisher-id}
      [:span
@@ -885,24 +887,21 @@
                :placeholder "New SHA-256 fingerprint"
                :aria-label (str "New fingerprint for " publisher-id)
                :on-change #(swap! publisher-rotation-drafts assoc publisher-id (.. % -target -value))}]
-      [:button {:aria-label (str "Rotate publisher " publisher-id)
+      (ui/button (str "Rotate " (:publisher/name publisher)) {:attrs {:aria-label (str "Rotate publisher " publisher-id)
                 :on-click #(swap! state update :project daw/rotate-plugin-publisher-key publisher-id
                                   (:publisher/fingerprint publisher)
                                   (get @publisher-rotation-drafts publisher-id "")
-                                  (long (/ (.now js/Date) 1000)))}
-       (str "Rotate " (:publisher/name publisher))]
-      [:button {:aria-label (str "Revoke publisher " publisher-id)
-                :on-click #(swap! state update :project daw/revoke-plugin-publisher publisher-id)}
-       (str "Revoke " (:publisher/name publisher))]])
+                                  (long (/ (.now js/Date) 1000)))}})
+      (ui/button (str "Revoke " (:publisher/name publisher)) {:attrs {:aria-label (str "Revoke publisher " publisher-id)
+                :on-click #(swap! state update :project daw/revoke-plugin-publisher publisher-id)}})])
    (for [[plugin-index plugin] (map-indexed vector (:project/plugins project))]
      ^{:key (:plugin/id plugin)}
      [:span.effect-automation
       [:strong (:plugin/id plugin)]
       (when-let [diagnostic (get @audio/plugin-diagnostics (:plugin/id plugin))]
         [:small {:aria-label (str (:plugin/id plugin) " runtime status")} (name diagnostic)])
-      [:button {:aria-label (str "Learn MIDI for " (:plugin/id plugin))
-                :on-click #(swap! state assoc :midi-learning-plugin (:plugin/id plugin))}
-       (if (= (:plugin/id plugin) (:midi-learning-plugin @state)) "Move a MIDI control…" "MIDI Learn")]
+      (ui/button (if (= (:plugin/id plugin) (:midi-learning-plugin @state)) "Move a MIDI control…" "MIDI Learn") {:attrs {:aria-label (str "Learn MIDI for " (:plugin/id plugin))
+                :on-click #(swap! state assoc :midi-learning-plugin (:plugin/id plugin))}})
       [:label "MIDI channel" [:input {:type "number" :min 1 :max 16
                                        :value (get-in @state [:midi-map-drafts (:plugin/id plugin) :channel] 1)
                                        :aria-label (str (:plugin/id plugin) " MIDI channel")
@@ -913,12 +912,12 @@
                                   :aria-label (str (:plugin/id plugin) " MIDI CC")
                                   :on-change #(swap! state assoc-in [:midi-map-drafts (:plugin/id plugin) :cc]
                                                      (js/parseInt (.. % -target -value)))}]]
-      [:button {:aria-label (str "Map MIDI to " (:plugin/id plugin))
+      (ui/button "Map MIDI" {:attrs {:aria-label (str "Map MIDI to " (:plugin/id plugin))
                 :on-click #(swap! state update :project daw/set-midi-cc-mapping
                                   (str "midi:" (:plugin/id plugin))
                                   (get-in @state [:midi-map-drafts (:plugin/id plugin) :channel] 1)
                                   (get-in @state [:midi-map-drafts (:plugin/id plugin) :cc] 74)
-                                  (:plugin/id plugin))} "Map MIDI"]
+                                  (:plugin/id plugin))}})
       [:label "Enabled" [:input {:type "checkbox" :checked (:plugin/enabled? plugin)
                                    :aria-label (str (:plugin/id plugin) " enabled")
                                    :on-change #(swap! state update :project daw/set-plugin-enabled (:plugin/id plugin)
@@ -965,21 +964,19 @@
                                           :aria-label (str (:plugin/id plugin) " automation trim delta")
                                           :on-change #(swap! state assoc-in [:mix-trim-deltas (:plugin/id plugin)]
                                                              (js/parseFloat (.. % -target -value)))}]]
-           [:button {:aria-label (str "Apply trim to " (:plugin/id plugin))
+           (ui/button "Apply trim" {:attrs {:aria-label (str "Apply trim to " (:plugin/id plugin))
                      :on-click #(swap! state update :project daw/trim-plugin-mix-automation
                                        (:plugin/id plugin)
-                                       (get-in @state [:mix-trim-deltas (:plugin/id plugin)] 0))}
-            "Apply trim"]])
+                                       (get-in @state [:mix-trim-deltas (:plugin/id plugin)] 0))}})])
         [:label "Thin tolerance" [:input {:type "number" :min 0 :max 1 :step 0.001
                                            :value (get-in @state [:mix-thin-tolerances (:plugin/id plugin)] 0.01)
                                            :aria-label (str (:plugin/id plugin) " automation thin tolerance")
                                            :on-change #(swap! state assoc-in [:mix-thin-tolerances (:plugin/id plugin)]
                                                               (js/parseFloat (.. % -target -value)))}]]
-        [:button {:aria-label (str "Thin automation for " (:plugin/id plugin))
+        (ui/button "Thin" {:attrs {:aria-label (str "Thin automation for " (:plugin/id plugin))
                   :on-click #(swap! state update :project daw/thin-plugin-mix-automation
                                     (:plugin/id plugin)
-                                    (get-in @state [:mix-thin-tolerances (:plugin/id plugin)] 0.01))}
-         "Thin"]
+                                    (get-in @state [:mix-thin-tolerances (:plugin/id plugin)] 0.01))}})
         [:label "A→" [:input {:type "number" :min 0 :max 1 :step 0.05 :value mix-start
                                :aria-label (str (:plugin/id plugin) " wet mix automation start")
                                :on-change #(swap! state update :project daw/set-plugin-mix-automation (:plugin/id plugin)
@@ -990,13 +987,13 @@
                                :on-change #(swap! state update :project daw/set-plugin-mix-automation (:plugin/id plugin)
                                                   [{:tick 0 :value mix-start}
                                                    {:tick end-tick :value (js/parseFloat (.. % -target -value))}])}]]])
-      [:button {:aria-label (str "Move " (:plugin/id plugin) " up") :disabled (zero? plugin-index)
-                :on-click #(swap! state update :project daw/move-plugin (:plugin/id plugin) :up)} "↑"]
-      [:button {:aria-label (str "Move " (:plugin/id plugin) " down")
+      (ui/button "↑" {:attrs {:aria-label (str "Move " (:plugin/id plugin) " up") :disabled (zero? plugin-index)
+                :on-click #(swap! state update :project daw/move-plugin (:plugin/id plugin) :up)}})
+      (ui/button "↓" {:attrs {:aria-label (str "Move " (:plugin/id plugin) " down")
                 :disabled (= plugin-index (dec (count (:project/plugins project))))
-                :on-click #(swap! state update :project daw/move-plugin (:plugin/id plugin) :down)} "↓"]
-      [:button {:aria-label (str "Remove " (:plugin/id plugin))
-                :on-click #(swap! state update :project daw/remove-plugin (:plugin/id plugin))} "Remove"]
+                :on-click #(swap! state update :project daw/move-plugin (:plugin/id plugin) :down)}})
+      (ui/button "Remove" {:attrs {:aria-label (str "Remove " (:plugin/id plugin))
+                :on-click #(swap! state update :project daw/remove-plugin (:plugin/id plugin))}})
       (for [[parameter descriptor] (:plugin/parameters (daw/plugin-descriptor plugin))
             :let [base (get-in plugin [:plugin/parameters parameter])
                   points (get-in plugin [:plugin/automation parameter])
@@ -1056,46 +1053,45 @@
    [:label "True-peak ceiling" [:input {:type "number" :min -6 :max 0 :step 0.1 :value (:true-peak-ceiling-db @state)
                                          :aria-label "True peak ceiling dBTP"
                                          :on-change #(swap! state assoc :true-peak-ceiling-db (js/parseFloat (.. % -target -value)))}]]
-   [:button {:on-click analyze-master! :disabled (:analyzing? @state)} (if (:analyzing? @state) "Analyzing…" "Analyze loudness")]
-   [:button {:on-click export! :disabled (:exporting? @state)} (if (:exporting? @state) "Rendering…" "Export WAV")]
-   [:button {:on-click export-stem-bundle! :disabled (:stem-bundle-exporting? @state)}
-    (if (:stem-bundle-exporting? @state) "Rendering all stems…" "Export all stems")]
-   [:button {:on-click download-project!} "Save project EDN"]
+   (ui/button (if (:analyzing? @state) "Analyzing…" "Analyze loudness") {:attrs {:on-click analyze-master! :disabled (:analyzing? @state)}})
+   (ui/button (if (:exporting? @state) "Rendering…" "Export WAV") {:attrs {:on-click export! :disabled (:exporting? @state)}})
+   (ui/button (if (:stem-bundle-exporting? @state) "Rendering all stems…" "Export all stems") {:attrs {:on-click export-stem-bundle! :disabled (:stem-bundle-exporting? @state)}})
+   (ui/button "Save project EDN" {:attrs {:on-click download-project!}})
    [:label "Open project EDN" [:input {:type "file" :accept ".edn,application/edn" :aria-label "Open DAW project EDN" :on-change load-project!}]]
-   [:button {:on-click export-package!} "Package project + media"]
+   (ui/button "Package project + media" {:attrs {:on-click export-package!}})
    [:label "Open media package" [:input {:type "file" :accept ".zip,.kami.zip,application/zip" :aria-label "Open DAW media package" :on-change open-package!}]]
    [:label "Relink audio" [:input {:type "file" :accept "audio/*" :multiple true :aria-label "Relink DAW audio files" :on-change relink-audio!}]]
    [:label "Search audio directory" [:input {:type "file" :accept "audio/*" :multiple true :webkitdirectory ""
                                               :aria-label "Search DAW audio directory" :on-change scan-audio-directory!}]]
-   [:button {:on-click undo! :disabled (empty? (get-in @state [:history :history/past])) :aria-label "Undo project edit"} "↶ Undo"]
-   [:button {:on-click redo! :disabled (empty? (get-in @state [:history :history/future])) :aria-label "Redo project edit"} "↷ Redo"]
-   [:button {:on-click #(js/navigator.clipboard.writeText (pr-str project))} "Copy EDN"]]
-  (when-let [error (:project-error @state)] [:section.meta [:strong (str "Project error: " error)]])
+   (ui/button "↶ Undo" {:attrs {:on-click undo! :disabled (empty? (get-in @state [:history :history/past])) :aria-label "Undo project edit"}})
+   (ui/button "↷ Redo" {:attrs {:on-click redo! :disabled (empty? (get-in @state [:history :history/future])) :aria-label "Redo project edit"}})
+   (ui/button "Copy EDN" {:attrs {:on-click #(js/navigator.clipboard.writeText (pr-str project))}})]
+  (when-let [error (:project-error @state)] [:section.daw-meta [:strong (str "Project error: " error)]])
   (when-let [report (:loudness-report @state)]
-    [:section.meta.master-analysis
+    [:section.daw-meta.master-analysis
      [:strong (str "Master: " (.toFixed (:loudness/lufs report) 1) " LUFS • "
                    (.toFixed (:true-peak/dbtp report) 1) " dBTP")]
      (when (contains? report :normalization/gain-db)
        [:span (str "Delivery: " (.toFixed (:delivery/lufs report) 1) " LUFS • "
                    (.toFixed (:delivery/true-peak-dbtp report) 1) " dBTP • gain "
                    (.toFixed (:normalization/gain-db report) 1) " dB")])])
-  (when (:directory-searching? @state) [:section.meta [:strong "Searching audio directory…"]])
+  (when (:directory-searching? @state) [:section.daw-meta [:strong "Searching audio directory…"]])
   (when-let [{:keys [matched missing ignored]} (:directory-result @state)]
-    [:section.meta [:strong (str "Directory relink: " matched " matched • " (count missing) " missing • " ignored " ignored")]])
-  (when (:recovered? @state) [:section.meta [:strong "Recovered autosaved project"]])
-  (when (seq missing) [:section.meta.missing-media [:strong (str "Missing media: " (count missing))] [:span (pr-str missing)]])
-  (when-let [error (:recording-error @state)] [:section.meta [:strong (str "Recording error: " error)]])
-  (when-let [{:keys [take total]} (:recording-loop @state)] [:section.meta [:strong (str "Capturing loop take " take " / " total)]])
-  (when (:input-monitor-active? @state) [:section.meta [:strong "Input monitor active • headphones recommended"]])
+    [:section.daw-meta [:strong (str "Directory relink: " matched " matched • " (count missing) " missing • " ignored " ignored")]])
+  (when (:recovered? @state) [:section.daw-meta [:strong "Recovered autosaved project"]])
+  (when (seq missing) [:section.daw-meta.missing-media [:strong (str "Missing media: " (count missing))] [:span (pr-str missing)]])
+  (when-let [error (:recording-error @state)] [:section.daw-meta [:strong (str "Recording error: " error)]])
+  (when-let [{:keys [take total]} (:recording-loop @state)] [:section.daw-meta [:strong (str "Capturing loop take " take " / " total)]])
+  (when (:input-monitor-active? @state) [:section.daw-meta [:strong "Input monitor active • headphones recommended"]])
   (when-let [clip (selected-clip project (:selected @state))]
-    [:section.meta.clip-editor [:strong (str "Edit • " (:clip/name clip))]
+    [:section.daw-meta.clip-editor [:strong (str "Edit • " (:clip/name clip))]
      [:label "Source offset" [:input {:type "number" :min 0 :step 0.05 :value (or (:clip/source-offset-sec clip) 0) :on-change #(edit-selected! :source-offset-sec (js/parseFloat (.. % -target -value)))}]]
      [:label "Fade in" [:input {:type "number" :min 0 :step 0.05 :value (or (:clip/fade-in-sec clip) 0.02) :on-change #(edit-selected! :fade-in-sec (js/parseFloat (.. % -target -value)))}]]
      [:label "Fade out" [:input {:type "number" :min 0 :step 0.05 :value (or (:clip/fade-out-sec clip) 0.05) :on-change #(edit-selected! :fade-out-sec (js/parseFloat (.. % -target -value)))}]]])
-  [:section.editor [:div.ruler [:span "1"] [:span "2"] [:span "3"] [:span "4"]]
+  [:section.daw-editor [:div.daw-ruler [:span "1"] [:span "2"] [:span "3"] [:span "4"]]
    (for [track (:project/tracks project)] ^{:key (:track/id track)} [track-row track total])
-   [:input.scrub {:type "range" :min 0 :max total :value tick :on-change #(swap! state assoc :tick (js/parseInt (.. % -target -value)))}]]
-  [:footer (if-let [errors (seq (daw/validate-project project))] (str "Errors: " errors) "Web Audio playback • low-pass + delay effects • offline WAV master")]]))
+   [:input.daw-scrub {:type "range" :min 0 :max total :value tick :on-change #(swap! state assoc :tick (js/parseInt (.. % -target -value)))}]]
+  [:footer.daw-footer (if-let [errors (seq (daw/validate-project project))] (str "Errors: " errors) "Web Audio playback • low-pass + delay effects • offline WAV master")]]))
 (defonce root-node (atom nil))
 (defn init! []
   (.insertAdjacentHTML (.-head js/document) "beforeend" kotoba-html-contract)
