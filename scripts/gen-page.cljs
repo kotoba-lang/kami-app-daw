@@ -12,22 +12,37 @@
   Check: same, with --check (exit 1 if the committed file is stale)"
   (:require ["node:fs" :as fs]
             ["node:process" :as process]
-            [kotoba-ui.core :as ui]
+            [jp-go-dds.page :as dds-page]
             [kami.app-daw.theme :as theme]))
+
+(def dds-root
+  "Where the vendored DADS CSS lives. nbb has no resource loader; env override
+  first, because a temp worktree outside the superproject (the standard shape
+  for parallel agents) defeats every relative guess. Mirrors
+  gftdcojp/itad's web/generate.cljs."
+  (or (first (filter #(and % (fs/existsSync (str % "/resources/jp_go_dds/dds.css")))
+                     [(some-> js/process .-env .-DDS_ROOT)
+                      "orgs/kotoba-lang/jp-go-digital-design-system"
+                      "../jp-go-digital-design-system"
+                      "../../kotoba-lang/jp-go-digital-design-system"]))
+      (throw (js/Error. (str "jp-go-digital-design-system の dds.css が見つからない。"
+                             "DDS_ROOT で場所を渡すこと。")))))
+
+(def dds-css (str (fs/readFileSync (str dds-root "/resources/jp_go_dds/dds.css") "utf8")))
 
 (def out-path "public/index.html")
 
 (defn page []
-  (ui/->page
+  (dds-page/->page
    {:title "KAMI DAW"
     :description "KAMI DAW — EDN-native music arrangement studio"
     :lang "ja"
-    :theme theme/theme
-    ;; app-css after the design system's bundle: unlayered, so it wins
-    ;; without a single compound selector (agent-guide rule 3).
-    :head [:style [:hiccup/raw theme/app-css]]}
-   ;; The app renders into this on boot. The fallback text is what a reader
-   ;; with no JS sees, and matches the <noscript> the app injects.
+    :css dds-css
+    ;; DADS is a light design system; `:dark? true` is this library's own
+    ;; inversion layer (not upstream's), which a DAW wants — you mix against
+    ;; a dark surround.
+    :dark? true
+    :app-css theme/app-css*}
    [:div {:id "app"} "KAMI DAW loading…"]
    [:script {:src "js/main.js"}]))
 

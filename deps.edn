@@ -2,12 +2,15 @@
  :deps {org.clojure/clojure {:mvn/version "1.12.0"}
         io.github.kotoba-lang/html {:git/url "https://github.com/kotoba-lang/html.git"
                                     :git/sha "44fe37a9120cb7753b974d921c7fc87448dace45"}
-        ;; kotoba-ui — kotoba-lang default design system, single entry
-        ;; (skill `kotoba-uiux` / ADR-2607122200). Replaces the frozen 39 KB
-        ;; public/liquid-glass.css artifact (which carried the glass material
-        ;; but zero --hig-* tokens) and the hand-written public/style.css.
-        io.github.kotoba-lang/kotoba-ui {:git/url "https://github.com/kotoba-lang/kotoba-ui.git"
-                                         :git/sha "ccb4544edc8d9bf439a85920fce0d4986a7bff62"}}
+        ;; jp-go-digital-design-system — デジタル庁デザインシステム(DADS)。
+        ;; **このワークスペースの基本 design system**(オーナー判断 2026-08-05;
+        ;; 実測 DADS 依存 170 repo / kotoba-ui 12 repo)。app CSS は `--hig-*`
+        ;; トークン契約で書いてあり、jp-go-dds.tokens/bridge-css が DADS
+        ;; primitive の上に再定義するので無改造で追従する。
+        io.github.kotoba-lang/jp-go-digital-design-system
+        {:git/url "https://github.com/kotoba-lang/jp-go-digital-design-system.git"
+         :git/sha "cc8f4849af5def7ea535fd6c0b8a623ccca645e9"}}
+
  :aliases {:cljs {:extra-deps {org.clojure/clojurescript {:mvn/version "1.11.132"}
                                 reagent/reagent {:mvn/version "1.2.0"}
                                 thheller/shadow-cljs {:mvn/version "2.28.20"}}}

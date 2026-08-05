@@ -1,6 +1,7 @@
 (ns kami.app-daw.theme
-  "KAMI DAW's theme and its stylesheet, on the kotoba-lang design system
-  (skill `kotoba-uiux`, ADR-2607122200).
+  "KAMI DAW's stylesheet, on **jp-go-dds** — the デジタル庁デザインシステム
+  (DADS) mirror, which is this workspace's base design system
+  (owner decision 2026-08-05).
 
   ── what this replaces ──────────────────────────────────────────────────────
   The app used to ship two stylesheets it maintained itself:
@@ -24,21 +25,14 @@
   beat grid, clips positioned by tick. Those rules stay here — but their
   colors and type come from tokens, so the timeline reads as part of the same
   system as everything else and flips with the appearance."
-  (:require [clojure.string :as str]
-            [kotoba-ui.core :as ui]))
+  (:require [jp-go-dds.core :as dds]
+            [jp-go-dds.tokens :as dds-tokens]))
 
-(def theme
-  "`#67e8f9` is the cyan the app already used for its focus ring, its eyebrow
-  label and its primary button — three hardcoded copies of one intention.
-  Promoted to the accent, so the tint, the focus ring, the glass wash and the
-  active states all derive from a single value.
-
-  `:appearance :dark` rather than `:auto`: this was, and stays, a dark
-  application. The difference is that `color-scheme: dark` used to be asserted
-  in a stylesheet with a hand-picked palette beneath it; now it is one key,
-  and the palette underneath is the contrast-checked HIG set."
-  {:accent "#67e8f9"
-   :appearance :dark})
+;; The theme map is gone. liquid-glass took one accent and derived a palette;
+;; DADS ships its own (デジタル庁ブルー, `--color-key-900`) and an app does not
+;; choose it. `#67e8f9` — the cyan this app used for its focus ring, eyebrow
+;; and primary button — is simply no longer part of the design, which is what
+;; adopting a base design system means.
 
 (def track-palette
   "Track colors, from the HIG system palette rather than invented per track.
@@ -75,12 +69,14 @@
    ".daw-footer{margin-top:auto;padding:var(--hig-spacing-4) var(--hig-spacing-content-margin);"
    "color:var(--hig-color-secondary-label)}\n"
    ".daw-eyebrow{color:var(--hig-color-tint);letter-spacing:.14em}\n"
-   ;; The transport's primary action. liquid-glass has one button look, so
-   ;; "this is the button you press" is expressed by filling it with the
-   ;; accent — the theme's own value, not a second one invented here.
-   ".daw-primary{background:var(--hig-color-tint);color:var(--hig-color-system-background);"
-   "font-weight:700}\n"
+   ;; No `.daw-primary`: DADS states "this is the button you press" with the
+   ;; button's own :type (:solid-fill), so the app stops painting it.
+   ".daw-toolbar{display:flex;align-items:center;flex-wrap:wrap;"
+   "gap:var(--hig-spacing-2);padding:var(--hig-spacing-2) var(--hig-spacing-content-margin);"
+   "border-bottom:1px solid var(--hig-color-separator);"
+   "background:var(--hig-color-secondary-system-background)}\n"
    ".daw-toolbar h1{margin:0;font-size:var(--hig-text-title3-font-size)}\n"
+   ".daw-spacer{flex:1 1 auto}\n"
    ;; Transport readouts: adjacent numbers need a gap, or "Tick 1440" and
    ;; "1.50 s" read as one number.
    ".daw-readout{color:var(--hig-color-secondary-label);white-space:nowrap;"
@@ -125,12 +121,22 @@
    ".daw-scrub{width:calc(100% - 145px);margin-left:135px}"
    "}\n"))
 
+(def app-css*
+  "Everything the app contributes to a DADS page's `:app-css` slot: the
+  `--hig-*` bridge, then the app's own rules.
+
+  `app-css` below is the app's rules alone; this is what a page wants. The
+  bridge comes first so the app can still override a token, the app last so
+  its rules win. `jp-go-dds.page` emits `dds/ext-css` itself between the
+  vendored bundle and this."
+  (str dds-tokens/bridge-css "\n" app-css))
+
 (defn stylesheet
-  "The complete CSS for the DAW page: the design system's bundle for `theme`
-  (HIG tokens, glass material, shell structure — layer-ordered) followed by
-  the app's own unlayered rules."
-  ([] (stylesheet theme))
-  ([t] (str (ui/theme-css t) "\n" app-css)))
+  "The complete CSS for a host that is not going through `jp-go-dds.page`.
+  `dds-css` is the vendored DADS stylesheet, read by the caller (nbb has no
+  resource loader; see scripts/gen-page.cljs)."
+  [dds-css]
+  (str dds-css "\n" dds/ext-css "\n" app-css*))
 
 (defn hex-free?
   "True when `s` contains no raw hex color. Used by the test that keeps this
