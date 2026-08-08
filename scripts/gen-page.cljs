@@ -1,6 +1,6 @@
 (ns gen-page
-  "Generate the app's HTML documents: `public/index.html` and
-  `public/user-test-dashboard.html`.
+  "Generate the app's documents: `public/index.html` — the single page — and
+  `public/404.html`, the fallback a static host needs to serve it.
 
   It used to be a hand-written file carrying its own theme-color, its own
   favicon fill, and two `<link>`s — one to a stylesheet the app maintained by
@@ -9,15 +9,18 @@
   tracks the design system instead of a snapshot of it, and picks up
   charset/viewport-fit/theme-color/data-appearance for free.
 
-  The dashboard was left behind by that change and kept its hand-written head —
-  including a `<link>` to the liquid-glass artifact the migration had deleted,
-  so it loaded no stylesheet at all. It is generated here now, from the same
-  theme, so the two pages of one app cannot drift onto two design systems.
+  There used to be a second document here, for the user-test dashboard, which
+  the DADS migration had left on the old stack — it linked a stylesheet that
+  migration deleted. It is a **view** now (`#/user-test`), not a document: this
+  app is a single-page app, the kotoba-lang default. Two documents of one app
+  meant two bundles, two shells to keep in step, and two chances to drift onto
+  two design systems.
 
   Run:   nbb --classpath \"$(clojure -Spath)\" scripts/gen-page.cljs
   Check: same, with --check (exit 1 if a committed file is stale)"
   (:require ["node:fs" :as fs]
             ["node:process" :as process]
+            [jp-go-dds.core :as dds]
             [jp-go-dds.dark :as dds-dark]
             [jp-go-dds.page :as dds-page]
             [kami.app-daw.theme :as theme]))
@@ -57,7 +60,7 @@
             :href (str "data:image/svg+xml," (js/encodeURIComponent svg))}]))
 
 (def out-path "public/index.html")
-(def dashboard-path "public/user-test-dashboard.html")
+(def not-found-path "public/404.html")
 
 (defn page []
   (dds-page/->page
@@ -72,32 +75,54 @@
     :app-css theme/app-css*
     :head [favicon]}
    [:div {:id "app"} "KAMI DAW loading…"]
+   ;; Served, not injected. `ui/kotoba-html-contract` used to carry this and add
+   ;; it on mount — i.e. with JavaScript, which is the one condition under which
+   ;; nobody can read it.
+   [:noscript "KAMI DAW requires JavaScript for audio transport and rendering."]
    [:script {:src "js/main.js"}]))
 
-(defn dashboard-page []
+(defn not-found-page
+  "The static-host fallback a single-page app needs.
+
+  GitHub Pages serves this for any path it cannot find, which is every path but
+  `/` once the app is one document. The app's own views are fragments and never
+  reach the host — but `user-test-dashboard.html` was a real, live URL for
+  months, so that one address is sent to the view that replaced it rather than
+  to a dead end.
+
+  This is the behaviour Cloudflare spells `not_found_handling:
+  single-page-application` (ADR-2606272330, ADR-2606290000); on Pages it has to
+  be a document, because there is no config in which to say it."
+  []
   (dds-page/->page
-   {:title "KAMI DAW · User-test dashboard"
-    :description "Compare KAMI DAW user-test sessions exported by actor runs"
-    ;; The copy on this page is English, as it was; the studio page says "ja".
+   {:title "KAMI DAW"
+    :description "KAMI DAW — EDN-native music arrangement studio"
     :lang "en"
     :css dds-css
-    ;; Same appearance as the studio: two pages of one app, one surround.
     :dark? true
     :app-css theme/app-css*
-    ;; The kotoba app-shell contract, stated in the document instead of
-    ;; inserted on mount. dashboard.cljs used to assign `head.innerHTML` to
-    ;; place it, which on a DADS page deletes the inline design system.
     :head [favicon
-           [:meta {:name "kotoba:app-shell" :content "kami-daw user-test dashboard"}]]}
-   [:div {:id "app"} "Loading…"]
-   ;; A <noscript> injected by JavaScript is never read by the one reader it is
-   ;; for. It belongs in the served document.
-   [:noscript "Enable JavaScript to compare user-test sessions."]
-   [:script {:src "js/dashboard.js"}]))
+           [:meta {:name "robots" :content "noindex"}]]}
+   [:main
+    (dds/container
+     (dds/section {}
+       (dds/heading 1 "Not here")
+       [:p {:class "dds-ext-lead"}
+        "This address is not part of KAMI DAW. "
+        [:a {:href "./"} "Open the app"] "."]))
+    ;; Relative `./`, so one artifact is correct at github.io/kami-app-daw/ and
+    ;; at any other mount point — a document cannot know its own base.
+    ;;
+    ;; Only the address that actually moved redirects. Rewriting *every* unknown
+    ;; path to `./` would send `/x/y` to `/x/`, which is also missing, and the
+    ;; fallback would redirect to itself forever. `replace`, not `assign`: a dead
+    ;; URL should not be left in the reader's back button.
+    [:script "if (location.pathname.endsWith('user-test-dashboard.html'))"
+     " location.replace('./#/user-test');"]]))
 
 (def documents
   [[out-path page]
-   [dashboard-path dashboard-page]])
+   [not-found-path not-found-page]])
 
 (defn -main [& args]
   (let [check? (some #{"--check"} args)

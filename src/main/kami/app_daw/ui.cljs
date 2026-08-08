@@ -2,6 +2,8 @@
                               [kami.app-daw.core :as daw] [kami.app-daw.audio :as audio] [kami.app-daw.bench :as bench]
                               [html.core :as html]
                               [jp-go-dds.core :as dds]
+                              [kami.app-daw.dashboard :as dashboard]
+                              [kami.app-daw.route :as route]
                               [kami.app-daw.theme :as theme]
                               [kami.app-daw.asset-sources :as asset-sources]
                               ["fflate" :refer [zipSync unzipSync strToU8 strFromU8]]))
@@ -13,8 +15,10 @@
                   {:track/id "voice" :track/name "Voice" :track/color (theme/track-color 2) :track/gain 0.9
  :track/clips [{:clip/id "hook" :clip/name "Hook" :clip/start-tick 2400 :clip/length-ticks 1440}]}]}))
 (def kotoba-html-contract
-  (html/html [:meta {:name "kotoba:app-shell" :content "kami-daw single-screen dads"}]
-             [:noscript "KAMI DAW requires JavaScript for audio transport and rendering."]))
+  ;; The <noscript> that used to live here is in the served document now
+  ;; (scripts/gen-page.cljs): injecting it with JavaScript meant the reader it
+  ;; addresses never saw it.
+  (html/html [:meta {:name "kotoba:app-shell" :content "kami-daw single-page dads"}]))
 (defonce state (r/atom {:project sample :history daw/empty-history :history-replaying? false :clip-drag nil :clip-preview nil :playing? false :tick 1440 :selected "beat-a" :meter-db -96 :cutoff 4200 :delay 0.12 :exporting? false :analyzing? false :loudness-report nil :normalize-export? true :target-lufs -14 :true-peak-ceiling-db -1 :stem-exporting nil :stem-bundle-exporting? false :directory-searching? false :directory-result nil :recording nil :recording-loop nil :recording-cancelled? false :input-monitoring? false :input-monitor-active? false :input-monitor-gain 0.35 :input-monitor-db -96 :recording-error nil :plugin-package-status nil :project-error nil :recovered? false :punch-length-ticks 960 :loop-takes 3 :mackie-bank 0 :mackie-profile :auto :mackie-active-profile :generic-mcu :mackie-touched-strips #{} :buffers {} :assets {} :network-source-status "Not loaded" :network-sources []}))
 (defonce bench-run (r/atom (or (bench/restore) (bench/initial-run))))
 (defn bench-panel [] (let [run @bench-run actor (bench/actor run)] [:aside.bench-panel {:aria-label "User test actor loop"} [:strong "User test loop"] [:select {:value (:actor-id run) :on-change #(do (swap! bench-run assoc :actor-id (.. % -target -value) :task-index 0) (bench/persist! @bench-run))} (for [{:keys [id label kind]} bench/actors] ^{:key id} [:option {:value id} (str label " • " (name kind))])] [:p (str "Task " (inc (:task-index run)) "/" (count (:tasks actor)) ": " (bench/current-task run))] (dds/button "Log observation" {:type :outline :size "sm" :attrs {:on-click #(bench/record! bench-run :observation {:note "manual observation"})}}) (dds/button "Pass / next task" {:type :outline :size "sm" :attrs {:on-click #(bench/complete-task! bench-run true 0)}}) (dds/button "Fail / next task" {:type :outline :size "sm" :attrs {:on-click #(bench/complete-task! bench-run false 1)}}) [:textarea {:placeholder "Participant feedback" :aria-label "Participant feedback" :on-blur #(bench/feedback! bench-run (.. % -target -value) :friction 0)}] (dds/button "Export EDN" {:type :outline :size "sm" :attrs {:on-click #(bench/export! @bench-run)}}) [:small (str "events=" (count (:events run)) " • session=" (:session-id run))]]))
@@ -730,9 +734,14 @@
 (defn track-row [track total]
   (let [asset-id (get-in track [:track/clips 0 :clip/asset-id]) asset (get-in @state [:assets asset-id])]
   [:div.daw-track [:div.daw-track-head [:strong (:track/name track)]
-    [:div.daw-row (dds/button (if (:track/armed? track) "R ✓" "R") {:type :outline :size "sm" :attrs {:on-click #(swap! state update :project daw/set-track (:track/id track) :track/armed? (not (:track/armed? track)))}})
-     (dds/button (if (:track/mute? track) "M ✓" "M") {:type :outline :size "sm" :attrs {:on-click #(swap! state update :project daw/set-track (:track/id track) :track/mute? (not (:track/mute? track)))}})
-     (dds/button (if (:track/solo? track) "S ✓" "S") {:type :outline :size "sm" :attrs {:on-click #(swap! state update :project daw/set-track (:track/id track) :track/solo? (not (:track/solo? track)))}})]
+    ;; R / M / S carry an aria-label naming the track and the function, like the
+    ;; Record and Import controls below them already do. Read aloud, "R" is not a
+    ;; control; and `:has-text("M")` matches "Export stem" too (Playwright's
+    ;; text match is a case-insensitive substring), so without a label there is
+    ;; no unambiguous handle on them — from a test or from assistive tech.
+    [:div.daw-row (dds/button (if (:track/armed? track) "R ✓" "R") {:type :outline :size "sm" :attrs {:aria-label (str "Arm " (:track/name track)) :aria-pressed (str (boolean (:track/armed? track))) :on-click #(swap! state update :project daw/set-track (:track/id track) :track/armed? (not (:track/armed? track)))}})
+     (dds/button (if (:track/mute? track) "M ✓" "M") {:type :outline :size "sm" :attrs {:aria-label (str "Mute " (:track/name track)) :aria-pressed (str (boolean (:track/mute? track))) :on-click #(swap! state update :project daw/set-track (:track/id track) :track/mute? (not (:track/mute? track)))}})
+     (dds/button (if (:track/solo? track) "S ✓" "S") {:type :outline :size "sm" :attrs {:aria-label (str "Solo " (:track/name track)) :aria-pressed (str (boolean (:track/solo? track))) :on-click #(swap! state update :project daw/set-track (:track/id track) :track/solo? (not (:track/solo? track)))}})]
     [:input {:type "file" :accept "audio/*" :aria-label (str "Import " (:track/name track) " audio") :on-change #(import-track! track %)}]
     (when asset [:small (:name asset)])
     (dds/button (if (= (:track/id track) (:recording @state)) "■ Stop take" "● Record") {:type :outline :size "sm" :attrs {:aria-label (str (if (= (:track/id track) (:recording @state)) "Stop " "Record ") (:track/name track))
@@ -790,11 +799,12 @@
               :fade-in-sec (or (:clip/fade-in-sec clip) 0.02)
               :fade-out-sec (or (:clip/fade-out-sec clip) 0.05)}]
     (swap! state update :project daw/edit-clip id (assoc edit k value))))
-(defn app [] (let [{:keys [playing? tick]} @state project (or (:clip-preview @state) (:project @state)) total (max 3840 (daw/duration-ticks project))
+(defn studio [] (let [{:keys [playing? tick]} @state project (or (:clip-preview @state) (:project @state)) total (max 3840 (daw/duration-ticks project))
                     missing (daw/missing-asset-ids project (keys (:buffers @state)))]
  [:main.daw-main [:header.daw-toolbar
    [:div [:small.daw-eyebrow "KOTOBA-LANG / MUSIC"] [:h1 "KAMI DAW"]]
    [:span.daw-spacer]
+   (route/nav :studio)
    (dds/button (if playing? "■ Stop" "▶ Play audio") {:type :solid-fill :size "sm" :attrs {:on-click toggle-play!}})
    [:span.daw-readout (str "Tick " tick)]
    [:span.daw-readout (str (.toFixed (daw/tick->seconds project tick) 2) " s")]
@@ -1092,8 +1102,22 @@
    [:input.daw-scrub {:type "range" :min 0 :max total :value tick :on-change #(swap! state assoc :tick (js/parseInt (.. % -target -value)))}]]
   [:footer.daw-footer (if-let [errors (seq (daw/validate-project project))] (str "Errors: " errors) "Web Audio playback • low-pass + delay effects • offline WAV master")]]))
 (defonce root-node (atom nil))
+
+(defn app
+  "The whole app: one mount, one of `route/views` rendered into it.
+
+  The studio keeps its state, its loaded buffers and its audio graph across a
+  view change, because nothing unmounts the document — that is the point of
+  being a single-page app rather than two pages that happen to share a
+  stylesheet."
+  []
+  (case (:id @route/current)
+    :user-test [dashboard/view]
+    [studio]))
+
 (defn init! []
   (.insertAdjacentHTML (.-head js/document) "beforeend" kotoba-html-contract)
+  (route/install!)
   (when-not @root-node
     (restore-recovery!) (install-history!) (install-autosave!) (install-shortcuts!)
     (reset! root-node (rdom/create-root (.getElementById js/document "app"))))

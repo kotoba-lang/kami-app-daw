@@ -7,14 +7,14 @@
   element, every one of those buttons would render and do nothing — the app
   would look finished and be inert. That is the failure this checks for.
 
-  It also drives `user-test-dashboard.html`, whose failure mode was the
-  opposite: that page mounted fine and was **unstyled**, because it linked a
-  stylesheet the migration had deleted and then replaced `<head>` wholesale on
-  mount. Neither the compiler nor a JVM test can see either of those — the first
-  is a 404, the second is a DOM mutation. Both are checked here.
+  It also drives the user-test view, and the claim that makes this a
+  single-page app rather than two pages sharing a stylesheet: crossing between
+  views must **not** load a document. That is unobservable from the source — the
+  code reads the same whether the nav is a router link or a plain href — so it is
+  checked by leaving a value on `window`, crossing, and finding it still there.
 
-  Run (after `shadow-cljs release app dashboard` + `nbb scripts/gen-page.cljs`,
-  with public/ served):
+  Run (after `shadow-cljs release app` + `nbb scripts/gen-page.cljs`, with
+  public/ served):
     DAW_URL=… npx nbb --classpath \"$(clojure -Spath)\" scripts/verify-browser.cljs"
   (:require ["node:process" :as process]
             ["playwright-core$default" :as pw]
@@ -23,8 +23,12 @@
 
 (def url (or (.. process -env -DAW_URL) "http://localhost:8735/"))
 
-(def dashboard-url
-  (str (if (str/ends-with? url "/") url (str url "/")) "user-test-dashboard.html"))
+(def root-url (if (str/ends-with? url "/") url (str url "/")))
+
+(def legacy-dashboard-url
+  "The address the dashboard had while it was a document. It was live for months;
+  `404.html` has to send it to the view that replaced it."
+  (str root-url "user-test-dashboard.html"))
 
 (def session-fixture
   "One exported session, in the JSON shape `bench/export-json!` writes: two
@@ -101,11 +105,11 @@
             (check! "and toggles back" (re-find #"Play" (str t)) t)))
 
    ;; A track's mute button is one of the 36; it flips its own label.
-   (fn [] (p/let [btn (.first (.locator page ".daw-track-head button:has-text('M')"))
+   (fn [] (p/let [btn (.first (.locator page "button[aria-label^='Mute ']"))
                   before (.textContent btn)
                   _ (.click btn)
                   _ (settle page)
-                  after (.textContent (.first (.locator page ".daw-track-head button:has-text('M')")))]
+                  after (.textContent (.first (.locator page "button[aria-label^='Mute ']")))]
             (check! "per-track ui/button mutates project state"
                     (not= (str before) (str after))
                     (str (str before) " -> " (str after)))))
@@ -142,13 +146,75 @@
 
    ])
 
+(defn- spa-checks
+  "One document, one bundle, and views reached without leaving it."
+  [page]
+  [(fn [] (p/let [scripts (.count (.locator page "script[src]"))]
+            (check! "the app ships one bundle" (= 1 scripts) scripts)))
+
+   (fn [] (p/let [links (.count (.locator page "nav[aria-label='Views'] a.dads-button"))
+                  current (.count (.locator page "nav[aria-label='Views'] a[aria-current='page']"))]
+            (check! "the nav is generated from the view table"
+                    (and (= 2 links) (= 1 current)) (str "links=" links " current=" current))))
+
+   ;; The single-page claim itself. If the nav were plain navigation this value
+   ;; would be gone after the crossing, and every other check here would still
+   ;; pass — which is why it is asserted rather than assumed.
+   (fn [] (p/let [_ (.evaluate page "window.__spaWitness = 'alive'")
+                  _ (.click (.locator page "nav[aria-label='Views'] a:has-text('User test')"))
+                  _ (.waitForSelector page "#sessions" #js {:timeout 15000})
+                  witness (.evaluate page "window.__spaWitness ?? 'gone'")
+                  hash (.evaluate page "location.hash")
+                  t (.textContent (.locator page "main h1"))]
+            (check! "crossing to the user-test view does not load a document"
+                    (and (= "alive" (str witness))
+                         (= "#/user-test" (str hash))
+                         (= "KAMI DAW · User-test dashboard" (str t)))
+                    (str witness " " hash " " t))))
+
+   ;; And back — a one-way router is a link, not a router.
+   (fn [] (p/let [_ (.click (.locator page "nav[aria-label='Views'] a:has-text('Studio')"))
+                  _ (settle page)
+                  witness (.evaluate page "window.__spaWitness ?? 'gone'")
+                  tracks (.count (.locator page ".daw-track"))]
+            (check! "and back to the studio, still without a document load"
+                    (and (= "alive" (str witness)) (>= tracks 2))
+                    (str witness " tracks=" tracks))))
+
+   ;; The studio's own state has to outlive a view change; if it did not, the
+   ;; single page would be buying nothing.
+   ;;
+   ;; A track's mute, not the transport. The transport looks like the better
+   ;; witness — "a DAW that stops playing because you opened a report is not one
+   ;; app" — but playback also ends by itself when it reaches the end of this
+   ;; short demo song, so asserting on it is a race, and one that only loses on a
+   ;; slow enough network. It passed locally and failed against the live site.
+   ;; A mute flag is project state: it changes only when something changes it.
+   ;;
+   ;; `settle` before reading: without it this read lands before React has
+   ;; re-rendered and returns the *pre-click* label, which then differs from the
+   ;; settled read after the crossing — a failure that looks exactly like lost
+   ;; state and is not (measured: it reported "M ✓ -> M" while the app's own
+   ;; autosave envelope showed the flag was never lost).
+   (fn [] (p/let [sel "button[aria-label^='Mute ']"
+                  _ (.click (.first (.locator page sel)))
+                  _ (settle page)
+                  flipped (.textContent (.first (.locator page sel)))
+                  _ (.click (.locator page "nav[aria-label='Views'] a:has-text('User test')"))
+                  _ (.waitForSelector page "#sessions" #js {:timeout 15000})
+                  _ (.click (.locator page "nav[aria-label='Views'] a:has-text('Studio')"))
+                  _ (.waitForSelector page ".daw-track" #js {:timeout 15000})
+                  after (.textContent (.first (.locator page sel)))]
+            (check! "studio project state survives the round trip"
+                    (= (str flipped) (str after)) (str flipped " -> " after))))])
+
 (defn- dashboard-checks
-  "The second document of the same app. Everything here is a DADS component or a
-  `dds-ext-*` helper, so the page ships no CSS of its own — which makes these
-  checks about whether the design system *arrives and survives*."
+  "The user-test view. Everything in it is a DADS component or a `dds-ext-*`
+  helper, so it ships no CSS of its own — which makes these checks about whether
+  the design system *arrives and survives*."
   [page]
   [(fn [] (p/let [t (.textContent (.locator page "main h1"))]
-            (check! "dashboard mounted" (= "KAMI DAW · User-test dashboard" (str t)) t)))
+            (check! "user-test view mounted" (= "KAMI DAW · User-test dashboard" (str t)) t)))
 
    ;; The page carried `<link href="liquid-glass.css">` to a file the DADS
    ;; migration deleted, and rendered `liquid-glass__*` classes no stylesheet
@@ -173,19 +239,26 @@
    (fn [] (p/let [meta (.count (.locator page "head meta[name='kotoba:app-shell']"))]
             (check! "app-shell contract is in the document" (= 1 meta) meta)))
 
+   (fn [] (p/let [n (.count (.locator page "nav[aria-label='Views'] a"))]
+            (check! "the user-test view can be left again" (= 2 n) n)))
+
    ;; It used to be injected by JavaScript, i.e. never shown to a reader without
    ;; JavaScript.
    (fn [] (p/let [html (.evaluate page "document.querySelector('noscript')?.textContent ?? ''")]
             (check! "noscript is served, not injected"
                     (str/includes? (str html) "JavaScript") (str html))))
 
-   (fn [] (p/let [n (.count (.locator page "input[type='file'].dads-input-text__input"))
+   (fn [] (p/let [n (.count (.locator page "#sessions.dads-input-text__input"))
                   label (.count (.locator page ".dads-form-control-label__label"))]
             (check! "the file control is a DADS form field"
                     (and (= 1 n) (pos? label)) (str "input=" n " label=" label))))
 
    ;; Import a real artifact and read the tally back out of the rendered table.
-   (fn [] (p/let [_ (.setInputFiles (.locator page "input[type='file']")
+   ;; `#sessions`, not `input[type=file]`: the studio has several of those, and
+   ;; asking for the bare selector on a single-page app is ambiguous the moment
+   ;; the render is a beat behind (which is exactly what happened against the
+   ;; live site).
+   (fn [] (p/let [_ (.setInputFiles (.locator page "#sessions")
                                     #js {:name "daw-fixture.json"
                                          :mimeType "application/json"
                                          :buffer (js/Buffer.from session-fixture "utf8")})
@@ -213,14 +286,30 @@
                                       (swap! errors conj (str (.text m) " @ " loc))))))
           _ (.on page "response" (fn [r] (when (and (>= (.status r) 400) (not (noise? (.url r))))
                                            (swap! errors conj (str (.status r) " " (.url r))))))
-          _ (.goto page url #js {:waitUntil "networkidle"})
+          _ (.goto page root-url #js {:waitUntil "networkidle"})
           _ (.waitForSelector page ".daw-track" #js {:timeout 15000})
           _ (run-all (checks page))
-          _ (.goto page dashboard-url #js {:waitUntil "networkidle"})
-          _ (.waitForSelector page "main h1" #js {:timeout 15000})
+          _ (run-all (spa-checks page))
+          ;; spa-checks leaves us on the studio; cross once more for the view's
+          ;; own checks.
+          _ (.click (.locator page "nav[aria-label='Views'] a:has-text('User test')"))
+          ;; Wait for something only this view has. `main h1` is in both views,
+          ;; so waiting on it returns before the crossing has rendered.
+          _ (.waitForSelector page "#sessions" #js {:timeout 15000})
           _ (run-all (dashboard-checks page))
-          ;; Last, so it covers both documents — including the 404 the deleted
-          ;; liquid-glass.css link produced on the dashboard.
+          ;; The one address that predates the single page. This is a real
+          ;; document load, and the host answers 404 before serving 404.html —
+          ;; which is the mechanism, not a fault, so it is dropped from `errors`
+          ;; rather than allowed to fail the run.
+          _ (.goto page legacy-dashboard-url #js {:waitUntil "networkidle"})
+          _ (.waitForSelector page "#sessions" #js {:timeout 15000})
+          _ (p/let [hash (.evaluate page "location.hash")
+                    t (.textContent (.locator page "main h1"))]
+              (swap! errors (fn [es] (remove #(str/includes? (str %) "user-test-dashboard.html") es)))
+              (check! "the dashboard's old URL still reaches its view"
+                      (and (= "#/user-test" (str hash))
+                           (= "KAMI DAW · User-test dashboard" (str t)))
+                      (str hash " " t)))
           _ (p/resolved (check! "no page errors, console errors or 4xx responses"
                                 (empty? @errors) (pr-str @errors)))
           _ (.close browser)]
