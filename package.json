@@ -7,7 +7,8 @@
     "check": "clojure -M:test",
     "page": "nbb --classpath \"$(clojure -Spath)\" scripts/gen-page.cljs",
     "page:check": "nbb --classpath \"$(clojure -Spath)\" scripts/gen-page.cljs --check",
-    "verify:browser": "nbb --classpath \"$(clojure -Spath)\" scripts/verify-browser.cljs"
+    "verify:browser": "nbb --classpath \"$(clojure -Spath)\" scripts/verify-browser.cljs",
+    "publish:pages": "nbb scripts/publish-pages.cljs"
   },
   "dependencies": {
     "fflate": "0.8.2",

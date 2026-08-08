@@ -17,6 +17,13 @@
 (defn restore [] (try (some-> (.getItem js/localStorage storage-key) reader/read-string) (catch :default _ nil)))
 (defn complete-task! [run-atom success? errors] (let [run @run-atom] (record! run-atom :task-result {:success? success? :errors (or errors 0) :duration-ms (- (now) (:task-started-at run))}) (swap! run-atom update :task-index #(min (dec (count (:tasks (actor run)))) (inc %))) (swap! run-atom assoc :task-started-at (now)) (persist! @run-atom)))
 (defn feedback! [run-atom text severity rating] (record! run-atom :feedback {:text text :severity severity :rating rating}) (persist! @run-atom))
-(defn summary [run] (let [results (filter #(= :task-result (:kind %)) (:events run))] {:passed (count (filter :success? results)) :failed (count (remove :success? results)) :errors (reduce + 0 (map #(or (:errors %) 0) results)) :avg-duration-ms (when (seq results) (/ (reduce + (map :duration-ms results)) (count results))) :source (:source run) :build (:build run)}))
+(defn task-result?
+  "True for a task-result event, whether it arrived as EDN (`:kind :task-result`,
+  what `restore` reads out of localStorage) or as JSON, where `export-json!`'s
+  `clj->js` has already flattened that keyword into a string. `summary` is
+  called on both — the dashboard imports the JSON."
+  [event]
+  (= "task-result" (some-> (:kind event) name)))
+(defn summary [run] (let [results (filter task-result? (:events run))] {:passed (count (filter :success? results)) :failed (count (remove :success? results)) :errors (reduce + 0 (map #(or (:errors %) 0) results)) :avg-duration-ms (when (seq results) (/ (reduce + (map :duration-ms results)) (count results))) :source (:source run) :build (:build run)}))
 (defn export! [run] (let [blob (js/Blob. #js [(pr-str run)] #js {:type "application/edn"}) url (js/URL.createObjectURL blob) a (.createElement js/document "a")] (set! (.-href a) url) (set! (.-download a) (str (:session-id run) ".edn")) (.click a) (js/setTimeout #(js/URL.revokeObjectURL url) 1000)))
 (defn export-json! [run] (let [blob (js/Blob. #js [(js/JSON.stringify (clj->js run) nil 2)] #js {:type "application/json"}) url (js/URL.createObjectURL blob) a (.createElement js/document "a")] (set! (.-href a) url) (set! (.-download a) (str (:session-id run) ".json")) (.click a) (js/setTimeout #(js/URL.revokeObjectURL url) 1000)))
