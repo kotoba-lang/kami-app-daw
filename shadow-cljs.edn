@@ -1,7 +1,14 @@
+;; One build, one module, one init-fn: KAMI DAW is a single-page app.
+;;
+;; There used to be a second build (`:dashboard`) for a second document. Two
+;; builds of one app means the React runtime, the cljs core and the design system
+;; are compiled and shipped twice, and every change to the app shell has to be
+;; made in both — while the reader pays a full document load to cross between
+;; them. The user-test dashboard is a view at `#/user-test` now
+;; (`kami.app-daw.route`).
 {:deps {:aliases [:cljs]}
- :builds {:app {:target :browser :output-dir "public/js" :asset-path "js"
+ :builds {:app {:target :browser
+                :output-dir "public/js"
+                :asset-path "js"
                 :modules {:main {:init-fn kami.app-daw.ui/init!}}
-                :release {:compiler-options {:optimizations :simple}}}
-          :dashboard {:target :browser :output-dir "public/js" :asset-path "js"
-                      :modules {:dashboard {:init-fn kami.app-daw.dashboard/init!}}
-                      :release {:compiler-options {:optimizations :simple}}}}}
+                :release {:compiler-options {:optimizations :simple}}}}}

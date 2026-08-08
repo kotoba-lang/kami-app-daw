@@ -37,9 +37,10 @@
 (def branch "gh-pages")
 
 (def required
-  "What a complete publish contains. `js/` is gitignored in the source tree; on
+  "What a complete publish contains: the single page, the static-host fallback
+  that serves it, and the one bundle. `js/` is gitignored in the source tree; on
   this branch it is the payload."
-  ["index.html" "user-test-dashboard.html" "js/main.js" "js/dashboard.js"])
+  ["index.html" "404.html" "js/main.js"])
 
 (defn- sh
   "Run a command, return trimmed stdout. Throws on non-zero exit."

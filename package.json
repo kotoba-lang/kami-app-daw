@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "release": "rm -rf public/js && mkdir -p public/js && shadow-cljs release app dashboard",
+    "release": "rm -rf public/js && mkdir -p public/js && shadow-cljs release app",
     "check": "clojure -M:test",
     "page": "nbb --classpath \"$(clojure -Spath)\" scripts/gen-page.cljs",
     "page:check": "nbb --classpath \"$(clojure -Spath)\" scripts/gen-page.cljs --check",
