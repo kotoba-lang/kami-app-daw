@@ -7,6 +7,11 @@
         ;; 実測 DADS 依存 170 repo / kotoba-ui 12 repo)。app CSS は `--hig-*`
         ;; トークン契約で書いてあり、jp-go-dds.tokens/bridge-css が DADS
         ;; primitive の上に再定義するので無改造で追従する。
+        ;; fragment routing, shared with the other kami-app-* single-page apps
+        io.github.kotoba-lang/route
+        {:git/url "https://github.com/kotoba-lang/route.git"
+         :git/sha "fe32c6dd1a46518fb42c4560792f1abc8c8175f2"}
+
         io.github.kotoba-lang/jp-go-digital-design-system
         {:git/url "https://github.com/kotoba-lang/jp-go-digital-design-system.git"
          :git/sha "cc8f4849af5def7ea535fd6c0b8a623ccca645e9"}}
