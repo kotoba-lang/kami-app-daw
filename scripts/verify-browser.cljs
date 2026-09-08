@@ -18,7 +18,7 @@
     DAW_URL=… npx nbb --classpath \"$(clojure -Spath)\" scripts/verify-browser.cljs"
   (:require ["node:process" :as process]
             ["playwright-core$default" :as pw]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [promesa.core :as p]))
 
 (def url (or (.. process -env -DAW_URL) "http://localhost:8735/"))
