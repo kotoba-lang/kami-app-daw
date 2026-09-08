@@ -1,5 +1,10 @@
 {:paths ["src/main" "resources"]
- :deps {org.clojure/clojure {:mvn/version "1.12.0"}
+ :deps {
+        ;; kotoba.lang.text, not clojure.string. Pinned as an explicit floor:
+        ;; tools.deps takes the NEWEST sha it is shown, so without a floor here
+        ;; this repo silently rides whatever a sibling happens to name.
+        io.github.kotoba-lang/text {:git/sha "73bdb13ae7a3d004b44bca08be03a3191157a38f"}
+       org.clojure/clojure {:mvn/version "1.12.0"}
         io.github.kotoba-lang/html {:git/url "https://github.com/kotoba-lang/html.git"
                                     :git/sha "44fe37a9120cb7753b974d921c7fc87448dace45"}
         ;; jp-go-digital-design-system — デジタル庁デザインシステム(DADS)。
