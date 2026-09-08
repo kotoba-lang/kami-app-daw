@@ -32,7 +32,7 @@
             ["node:fs" :as fs]
             ["node:path" :as path]
             ["node:process" :as process]
-            [clojure.string :as str]))
+            [kotoba.lang.text :as str]))
 
 (def branch "gh-pages")
 
