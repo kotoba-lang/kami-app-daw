@@ -2,7 +2,7 @@
   "Locks the property the design-system migration bought: the app states its
   colors and type once, in a theme map, and everything else references tokens."
   (:require [clojure.test :refer [deftest is testing]]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [jp-go-dds.tokens :as dds-tokens]
             [kami.app-daw.theme :as theme]))
 

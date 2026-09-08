@@ -1,4 +1,4 @@
-(ns kami.app-daw.core (:require [clojure.string :as str]))
+(ns kami.app-daw.core (:require [kotoba.lang.text :as str]))
 
 (def schema "kami.ongaku-project/v1")
 (def history-limit 50)
@@ -427,7 +427,7 @@
 (defn mackie-hardware-profile [profile-id]
   (get mackie-hardware-profiles profile-id (:generic-mcu mackie-hardware-profiles)))
 (defn detect-mackie-hardware-profile [port-names]
-  (let [names (str/upper-case (str/join " " (remove nil? port-names)))]
+  (let [names (str/upper (str/join " " (remove nil? port-names)))]
     (cond (str/includes? names "X-TOUCH") :behringer-x-touch
           (or (str/includes? names "PLATFORM M+") (str/includes? names "PLATFORM M PLUS")) :icon-platform-m-plus
           (str/includes? names "MACKIE CONTROL") :mackie-control
