@@ -2,3 +2,6 @@
 /.shadow-cljs
 /public/js
 /.cpcache
+
+# nbb dependency cache -- a build artifact, not source
+.nbb/
