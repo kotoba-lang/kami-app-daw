@@ -110,7 +110,7 @@
        [:p {:class "dds-ext-lead"}
         "This address is not part of KAMI DAW. "
         [:a {:href "./"} "Open the app"] "."]))
-    ;; Relative `./`, so one artifact is correct at github.io/kami-app-daw/ and
+    ;; Relative `./`, so one artifact is correct at github.io/app-itonami-daw/ and
     ;; at any other mount point — a document cannot know its own base.
     ;;
     ;; Only the address that actually moved redirects. Rewriting *every* unknown

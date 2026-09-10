@@ -25,7 +25,7 @@ npm install
 npx shadow-cljs watch app
 ```
 
-Open <http://localhost:9630>. Public app: <https://kotoba-lang.github.io/kami-app-daw/>
+Open <http://localhost:9630>. Public app: <https://cloud-itonami.github.io/app-itonami-daw/>
 
 ## Verify
 

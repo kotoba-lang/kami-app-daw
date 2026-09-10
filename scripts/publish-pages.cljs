@@ -5,7 +5,7 @@
   `.github/workflows/pages.yml` built this site until 2026-08-04. Actions are
   now disabled repo-wide (ADR-2607300900: CI/CD is the murakumo fleet, not
   GitHub), so the workflow cannot run — and because it cannot run, nothing ever
-  failed. `kotoba-lang.github.io/kami-app-daw/` simply kept serving the last
+  failed. `cloud-itonami.github.io/app-itonami-daw/` simply kept serving the last
   artifact it had built: the pre-DADS liquid-glass page, long after the app moved
   onto jp-go-dds. A publish path that stops silently is worse than none, so this
   is the publish path now.
