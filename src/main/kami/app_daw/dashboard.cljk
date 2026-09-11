@@ -23,7 +23,7 @@
     for never saw it.
 
   The document — head, app-shell contract, noscript — comes from
-  `scripts/gen-page.cljs`, server-side. Everything here is a DADS component or a
+  `scripts/gen-page.cljk`, server-side. Everything here is a DADS component or a
   `dds-ext-*` layout helper, so this view contributes no CSS of its own."
   (:require [reagent.core :as r]
             [jp-go-dds.core :as dds]
