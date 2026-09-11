@@ -3,12 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "release": "rm -rf public/js && mkdir -p public/js && shadow-cljs release app",
-    "check": "clojure -M:test",
-    "page": "nbb --classpath \"$(clojure -Spath)\" scripts/gen-page.cljk",
-    "page:check": "nbb --classpath \"$(clojure -Spath)\" scripts/gen-page.cljk --check",
-    "verify:browser": "nbb --classpath \"$(clojure -Spath)\" scripts/verify-browser.cljk",
-    "publish:pages": "nbb scripts/publish-pages.cljk"
+    "release": "rm -rf public/js && mkdir -p public/js && amu compile --target wasm32-browser app",
+    "check": "kbb -M:test",
+    "page": "kbb --backend sci --classpath \"$(kbb -Spath)\" scripts/gen-page.cljk",
+    "page:check": "kbb --backend sci --classpath \"$(kbb -Spath)\" scripts/gen-page.cljk --check",
+    "verify:browser": "kbb --backend sci --classpath \"$(kbb -Spath)\" scripts/verify-browser.cljk",
+    "publish:pages": "kbb --backend sci scripts/publish-pages.cljk"
   },
   "dependencies": {
     "fflate": "0.8.2",
