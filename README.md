@@ -22,7 +22,7 @@ Project-authoritative plugin slots use one manifest for processor identity, para
 
 ```sh
 npm install
-npx shadow-cljs watch app
+amu compile --target wasm32-browser app
 ```
 
 Open <http://localhost:9630>. Public app: <https://cloud-itonami.github.io/app-itonami-daw/>

@@ -16,7 +16,7 @@
   meant two bundles, two shells to keep in step, and two chances to drift onto
   two design systems.
 
-  Run:   nbb --classpath \"$(clojure -Spath)\" scripts/gen-page.cljk
+  Run:   kbb --backend sci --classpath \"$(kbb -Spath)\" scripts/gen-page.cljk
   Check: same, with --check (exit 1 if a committed file is stale)"
   (:require ["node:fs" :as fs]
             ["node:process" :as process]
@@ -142,7 +142,7 @@
           (do (fs/writeFileSync path html)
               (println "wrote" path (count html) "bytes")))))
     (when (seq @stale)
-      (println "Run: nbb --classpath \"$(clojure -Spath)\" scripts/gen-page.cljk")
+      (println "Run: kbb --backend sci --classpath \"$(kbb -Spath)\" scripts/gen-page.cljk")
       (process/exit 1))))
 
 (apply -main (drop 2 (js->clj (.-argv process))))
