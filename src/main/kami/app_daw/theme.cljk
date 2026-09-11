@@ -134,7 +134,7 @@
 (defn stylesheet
   "The complete CSS for a host that is not going through `jp-go-dds.page`.
   `dds-css` is the vendored DADS stylesheet, read by the caller (nbb has no
-  resource loader; see scripts/gen-page.cljs)."
+  resource loader; see scripts/gen-page.cljk)."
   [dds-css]
   (str dds-css "\n" dds/ext-css "\n" app-css*))
 

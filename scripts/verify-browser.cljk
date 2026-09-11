@@ -13,9 +13,9 @@
   code reads the same whether the nav is a router link or a plain href — so it is
   checked by leaving a value on `window`, crossing, and finding it still there.
 
-  Run (after `shadow-cljs release app` + `nbb scripts/gen-page.cljs`, with
+  Run (after `shadow-cljs release app` + `nbb scripts/gen-page.cljk`, with
   public/ served):
-    DAW_URL=… npx nbb --classpath \"$(clojure -Spath)\" scripts/verify-browser.cljs"
+    DAW_URL=… npx nbb --classpath \"$(clojure -Spath)\" scripts/verify-browser.cljk"
   (:require ["node:process" :as process]
             ["playwright-core$default" :as pw]
             [kotoba.lang.text :as str]
